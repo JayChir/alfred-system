@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Main agent server
+  alfred-agent:
+    build: 
+      context: ./agent
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alfred
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    depends_on:
+      - postgres
+    volumes:
+      - ./agent:/app
+    restart: unless-stopped
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=alfred
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # Memory MCP Server
+  memory-mcp:
+    build:
+      context: ./mcp-servers/memory
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alfred
+    restart: unless-stopped
+
+  # Filesystem MCP Server  
+  filesystem-mcp:
+    build:
+      context: ./mcp-servers/filesystem
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Custom Notion MCP Server
+  notion-mcp:
+    build:
+      context: ./mcp-servers/notion
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      - NOTION_TOKEN=${NOTION_TOKEN}
+    restart: unless-stopped
+
+  # GitHub MCP Server
+  github-mcp:
+    build:
+      context: ./mcp-servers/github
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    restart: unless-stopped
+
+  # Web interface (Next.js PWA)
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://alfred-agent:8000
+    depends_on:
+      - alfred-agent
+    restart: unless-stopped
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - alfred-agent
+      - web
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
