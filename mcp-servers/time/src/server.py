@@ -132,5 +132,5 @@ def list_timezones(region: Optional[str] = None) -> list:
     }
 
 if __name__ == "__main__":
-    # Run the FastMCP server
-    mcp.run()
+    # Run the FastMCP server with HTTP transport (Streamable HTTP)
+    mcp.run(transport="http", host="0.0.0.0", port=8005)
