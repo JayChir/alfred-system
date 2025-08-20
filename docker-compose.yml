@@ -86,6 +86,15 @@ services:
       - "8005:8000"
     restart: unless-stopped
 
+  # Sequential Thinking MCP Server
+  sequential-thinking-mcp:
+    build:
+      context: ./mcp-servers/sequential-thinking
+      dockerfile: Dockerfile
+    ports:
+      - "8007:8007"
+    restart: unless-stopped
+
   # Web interface (Next.js PWA)
   web:
     build:
