@@ -77,6 +77,15 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     restart: unless-stopped
 
+  # Time MCP Server
+  time-mcp:
+    build:
+      context: ./mcp-servers/time
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8000"
+    restart: unless-stopped
+
   # Web interface (Next.js PWA)
   web:
     build:
