@@ -91,35 +91,36 @@ echo ""
 echo -e "${GREEN}Notion Configuration${NC}"
 echo "Create integration at: https://www.notion.so/my-integrations"
 echo ""
-echo -e "${YELLOW}Enter your Notion API Key:${NC}"
-echo "(Starts with 'secret_')"
-NOTION=$(prompt_secret "" "NOTION_API_KEY" "$NOTION_API_KEY")
+echo -e "${YELLOW}Enter your Notion Integration Token:${NC}"
+echo "(Starts with 'ntn_')"
+NOTION=$(prompt_secret "" "NOTION_INTEGRATION_TOKEN" "$NOTION_INTEGRATION_TOKEN")
 
 echo ""
-echo -e "${GREEN}Atlassian Configuration${NC}"
-echo -e "${YELLOW}(Press Enter to skip all Atlassian config if not needed)${NC}"
+echo -e "${GREEN}[OPTIONAL] Atlassian Configuration${NC}"
+echo -e "${YELLOW}Skip this entire section if you don't use Confluence/JIRA${NC}"
+echo -e "${YELLOW}If configuring, ALL fields below are required${NC}"
 echo "Create API token at: https://id.atlassian.com/manage-profile/security/api-tokens"
 echo ""
 
-echo -e "${YELLOW}[Optional] Enter Confluence URL:${NC}"
+echo -e "${YELLOW}Enter Confluence URL (or press Enter to skip Atlassian setup):${NC}"
 echo "(Example: https://company.atlassian.net/wiki/)"
 CONF_URL=$(prompt_value "" "CONFLUENCE_URL" "https://company.atlassian.net/wiki/" "$CONFLUENCE_URL")
 
-echo -e "${YELLOW}[Optional] Enter Confluence Username (email):${NC}"
+echo -e "${YELLOW}Enter Confluence Username (email):${NC}"
 CONF_USER=$(prompt_value "" "CONFLUENCE_USERNAME" "" "$CONFLUENCE_USERNAME")
 
-echo -e "${YELLOW}[Optional] Enter Confluence API Token:${NC}"
+echo -e "${YELLOW}Enter Confluence API Token:${NC}"
 CONF_TOKEN=$(prompt_secret "" "CONFLUENCE_API_TOKEN" "$CONFLUENCE_API_TOKEN")
 
-echo -e "${YELLOW}[Optional] Enter JIRA URL:${NC}"
+echo -e "${YELLOW}Enter JIRA URL:${NC}"
 echo "(Example: https://company.atlassian.net/)"
 JIRA_URL=$(prompt_value "" "JIRA_URL" "https://company.atlassian.net/" "$JIRA_URL")
 
-echo -e "${YELLOW}[Optional] Enter JIRA Username (email):${NC}"
+echo -e "${YELLOW}Enter JIRA Username (email):${NC}"
 echo "(Press Enter to use same as Confluence)"
 JIRA_USER=$(prompt_value "" "JIRA_USERNAME" "$CONFLUENCE_USERNAME" "$JIRA_USERNAME")
 
-echo -e "${YELLOW}[Optional] Enter JIRA API Token:${NC}"
+echo -e "${YELLOW}Enter JIRA API Token:${NC}"
 echo "(Press Enter to use same as Confluence)"
 JIRA_TOKEN=$(prompt_secret "" "JIRA_API_TOKEN" "${CONFLUENCE_API_TOKEN:-$JIRA_API_TOKEN}")
 

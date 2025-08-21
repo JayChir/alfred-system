@@ -188,7 +188,7 @@ SHELL_CMD=/usr/bin/docker run -i --rm mcp/fetch
 **Notion** (`/etc/mcp/notion.env`):
 ```env
 PORT=7006
-SHELL_CMD=/usr/bin/docker run -i --rm -e NOTION_API_KEY=${NOTION_TOKEN} mcp/notion
+SHELL_CMD=/usr/bin/docker run -i --rm -e NOTION_API_KEY=${NOTION_INTEGRATION_TOKEN} mcp/notion
 ```
 
 **Filesystem** (`/etc/mcp/filesystem.env`):
@@ -442,7 +442,7 @@ GITHUB_PERSONAL_TOKEN=ghp_your_personal_token
 GITHUB_WORK_TOKEN=ghp_your_work_token
 
 # Notion integration
-NOTION_TOKEN=secret_your_notion_token
+NOTION_INTEGRATION_TOKEN=ntn_your_notion_token
 
 # Atlassian credentials
 CONFLUENCE_URL=https://your-company.atlassian.net/wiki/
