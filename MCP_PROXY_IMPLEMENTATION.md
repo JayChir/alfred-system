@@ -17,38 +17,91 @@ Local Claude Desktop → HTTPS → artemsys.ai subdomains → nginx → mcp-prox
 - **systemd**: Process management with template units for easy scaling
 - **Docker**: Official MCP server containers running in stdio mode
 
+## CRITICAL DEBUGGING LEARNINGS
+
+### Working Solution Summary
+
+After extensive debugging, here's what actually works:
+
+1. **Use `--shell` mode** - Most reliable for Docker commands with arguments
+2. **Install mcp-proxy globally** - Avoid npx in systemd services
+3. **Use root user** - Required for Docker access (or add user to docker group)
+4. **Absolute paths** - Always use full paths in systemd
+
+### Common Issues and Solutions
+
+#### Issue 1: "Not enough non-option arguments"
+**Cause**: mcp-proxy not receiving command arguments correctly
+**Solution**: Use `--shell` mode or `--` separator before command
+
+#### Issue 2: "Connection closed" errors
+**Cause**: Docker container exits immediately
+**Solution**: Ensure proper argument passing and Docker permissions
+
+#### Issue 3: Arguments being misinterpreted
+**Cause**: bash -c or incorrect quoting in systemd
+**Solution**: Never use bash -c wrapper, use direct execution
+
+### Debugging Checklist
+
+1. **Test Docker directly**: 
+   ```bash
+   docker run -i --rm mcp/time --help
+   ```
+
+2. **Test proxy manually**: 
+   ```bash
+   mcp-proxy --port 7001 --shell "/usr/bin/docker run -i --rm mcp/time"
+   ```
+
+3. **Check container status**: 
+   ```bash
+   docker ps --filter ancestor=mcp/time
+   ```
+
+4. **Check port availability**: 
+   ```bash
+   lsof -i :7001
+   ```
+
+5. **Test HTTP endpoint**: 
+   ```bash
+   curl -i http://127.0.0.1:7001/mcp \
+     -H "Content-Type: application/json" \
+     --data '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"clientInfo":{"name":"probe","version":"1.0.0"}}}'
+   ```
+
 ## Implementation Phases
 
-### Phase 1: Setup Infrastructure (1-2 hours)
+### Phase 1: Setup Infrastructure (COMPLETED)
 
 #### Prerequisites Installation
 
 On the droplet (134.209.51.66):
 
 ```bash
-# Install Node.js 18+ for mcp-proxy
+# Install Node.js 20 for mcp-proxy
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# Install mcp-proxy globally
+# Install mcp-proxy globally (CRITICAL: Don't use npx in services)
 sudo npm install -g mcp-proxy
 
 # Verify installation
-npx mcp-proxy --version
+which mcp-proxy  # Should show /usr/bin/mcp-proxy
 ```
 
 #### Directory Structure
 
 ```bash
 # Create MCP directory structure
-sudo mkdir -p /opt/mcp/{config,logs}
-sudo useradd -r -s /bin/false mcp
-sudo chown -R mcp:mcp /opt/mcp
+sudo mkdir -p /etc/mcp  # For environment files
+sudo mkdir -p /opt/mcp  # For working directory
 ```
 
-### Phase 2: Reusable Template System (2-3 hours)
+### Phase 2: Reusable Template System (COMPLETED)
 
-#### Systemd Template Unit
+#### Systemd Template Unit (WORKING VERSION)
 
 Create `/etc/systemd/system/mcp@.service`:
 
@@ -59,18 +112,25 @@ After=network.target docker.service
 Wants=docker.service
 
 [Service]
-EnvironmentFile=/opt/mcp/config/%i.env
-ExecStart=/usr/bin/npx mcp-proxy --port ${PORT} -- ${CMD} ${ARGS}
+EnvironmentFile=/etc/mcp/%i.env
+# CRITICAL: Use --shell mode for reliable argument passing
+ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell "${SHELL_CMD}"
 Restart=always
-User=mcp
-Group=mcp
+RestartSec=2
+User=root  # Required for Docker access
+Group=root
 WorkingDirectory=/opt/mcp
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+**Key Changes from Original:**
+- Changed from `/opt/mcp/config` to `/etc/mcp` for env files
+- Using `--shell` mode instead of tokenized arguments
+- Using root user for Docker permissions
+- Direct mcp-proxy binary instead of npx
+- Added RestartSec for stability
 
 #### Nginx Proxy Configuration
 
@@ -91,79 +151,75 @@ proxy_set_header X-Forwarded-Proto $scheme;
 
 ### Phase 3: Configure Each MCP Server (15 minutes per server)
 
-#### Environment Files
+#### Environment Files (WORKING FORMAT)
 
-For each MCP server, create a configuration file in `/opt/mcp/config/`:
+For each MCP server, create a configuration file in `/etc/mcp/`:
 
-**Time Server** (`/opt/mcp/config/time.env`):
+**Time Server** (`/etc/mcp/time.env`):
 ```env
-PORT=3001
-CMD=/usr/bin/docker
-ARGS=run -i --rm mcp/time
+PORT=7001
+SHELL_CMD=/usr/bin/docker run -i --rm mcp/time
 ```
 
-**GitHub Personal** (`/opt/mcp/config/github-personal.env`):
+**Sequential Thinking** (`/etc/mcp/sequential-thinking.env`):
 ```env
-PORT=3002
-CMD=/usr/bin/docker
-ARGS=run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_PERSONAL_TOKEN} mcp/github
+PORT=7002
+SHELL_CMD=/usr/bin/docker run -i --rm mcp/sequentialthinking
 ```
 
-**GitHub Work** (`/opt/mcp/config/github-work.env`):
+**GitHub Personal** (`/etc/mcp/github-personal.env`):
 ```env
-PORT=3003
-CMD=/usr/bin/docker
-ARGS=run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_WORK_TOKEN} mcp/github
+PORT=7003
+SHELL_CMD=/usr/bin/docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_PERSONAL_TOKEN} mcp/github
 ```
 
-**Fetch** (`/opt/mcp/config/fetch.env`):
+**GitHub Work** (`/etc/mcp/github-work.env`):
 ```env
-PORT=3004
-CMD=/usr/bin/docker
-ARGS=run -i --rm mcp/fetch
+PORT=7004
+SHELL_CMD=/usr/bin/docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_WORK_TOKEN} mcp/github
 ```
 
-**Notion** (`/opt/mcp/config/notion.env`):
+**Fetch** (`/etc/mcp/fetch.env`):
 ```env
-PORT=3005
-CMD=/usr/bin/docker
-ARGS=run -i --rm -e NOTION_API_KEY=${NOTION_TOKEN} mcp/notion
+PORT=7005
+SHELL_CMD=/usr/bin/docker run -i --rm mcp/fetch
 ```
 
-**Sequential Thinking** (`/opt/mcp/config/sequential-thinking.env`):
+**Notion** (`/etc/mcp/notion.env`):
 ```env
-PORT=3006
-CMD=/usr/bin/docker
-ARGS=run -i --rm mcp/sequentialthinking
+PORT=7006
+SHELL_CMD=/usr/bin/docker run -i --rm -e NOTION_API_KEY=${NOTION_TOKEN} mcp/notion
 ```
 
-**Filesystem** (`/opt/mcp/config/filesystem.env`):
+**Filesystem** (`/etc/mcp/filesystem.env`):
 ```env
-PORT=3007
-CMD=/usr/bin/docker
-ARGS=run -i --rm -v /opt/mcp/data:/data:rw mcp/filesystem
+PORT=7007
+SHELL_CMD=/usr/bin/docker run -i --rm -v /opt/mcp/data:/data:rw mcp/filesystem
 ```
 
-**Playwright** (`/opt/mcp/config/playwright.env`):
+**Playwright** (`/etc/mcp/playwright.env`):
 ```env
-PORT=3008
-CMD=/usr/bin/docker
-ARGS=run -i --rm mcp/playwright
+PORT=7008
+SHELL_CMD=/usr/bin/docker run -i --rm mcp/playwright
 ```
 
-**Memory** (`/opt/mcp/config/memory.env`):
+**Memory** (`/etc/mcp/memory.env`):
 ```env
-PORT=3009
-CMD=/usr/bin/docker
-ARGS=run -i --rm mcp/memory
+PORT=7009
+SHELL_CMD=/usr/bin/docker run -i --rm -v claude-memory:/app/dist mcp/memory
 ```
 
-**Atlassian** (`/opt/mcp/config/atlassian.env`):
+**Atlassian** (`/etc/mcp/atlassian.env`):
 ```env
-PORT=3010
-CMD=/usr/bin/docker
-ARGS=run -i --rm -e CONFLUENCE_URL=${CONFLUENCE_URL} -e CONFLUENCE_USERNAME=${ATLASSIAN_USERNAME} -e CONFLUENCE_API_TOKEN=${ATLASSIAN_API_TOKEN} -e JIRA_URL=${JIRA_URL} -e JIRA_USERNAME=${ATLASSIAN_USERNAME} -e JIRA_API_TOKEN=${ATLASSIAN_API_TOKEN} ghcr.io/sooperset/mcp-atlassian:latest
+PORT=7010
+SHELL_CMD=/usr/bin/docker run -i --rm -e CONFLUENCE_URL=${CONFLUENCE_URL} -e CONFLUENCE_USERNAME=${ATLASSIAN_USERNAME} -e CONFLUENCE_API_TOKEN=${ATLASSIAN_API_TOKEN} -e JIRA_URL=${JIRA_URL} -e JIRA_USERNAME=${ATLASSIAN_USERNAME} -e JIRA_API_TOKEN=${ATLASSIAN_API_TOKEN} ghcr.io/sooperset/mcp-atlassian:latest
 ```
+
+**Important Notes:**
+- All use SHELL_CMD format for --shell mode
+- Ports changed to 7xxx range to avoid conflicts
+- Environment variables will be expanded from system environment
+- Memory server needs volume for persistence
 
 ### Phase 4: Nginx Configuration (30 minutes)
 
