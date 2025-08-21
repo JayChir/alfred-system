@@ -78,29 +78,50 @@ echo -e "${GREEN}GitHub Configuration${NC}"
 echo "Create tokens at: https://github.com/settings/tokens"
 echo "Required scopes: repo, read:org, gist"
 echo ""
+echo -e "${YELLOW}Enter your GitHub Personal Access Token:${NC}"
+echo "(Note: Your input will be hidden for security)"
+GITHUB_PERSONAL=$(prompt_secret "" "GITHUB_PERSONAL_ACCESS_TOKEN" "$GITHUB_PERSONAL_ACCESS_TOKEN")
 
-GITHUB_PERSONAL=$(prompt_secret "GitHub Personal Access Token" "GITHUB_PERSONAL_ACCESS_TOKEN" "$GITHUB_PERSONAL_ACCESS_TOKEN")
-GITHUB_WORK=$(prompt_secret "GitHub Work Access Token (or press Enter to use same as personal)" "GITHUB_WORK_ACCESS_TOKEN" "$GITHUB_WORK_ACCESS_TOKEN")
+echo ""
+echo -e "${YELLOW}[Optional] Enter your GitHub Work Access Token:${NC}"
+echo "(Press Enter to skip and use the same as personal)"
+GITHUB_WORK=$(prompt_secret "" "GITHUB_WORK_ACCESS_TOKEN" "$GITHUB_WORK_ACCESS_TOKEN")
 
 echo ""
 echo -e "${GREEN}Notion Configuration${NC}"
 echo "Create integration at: https://www.notion.so/my-integrations"
 echo ""
-
-NOTION=$(prompt_secret "Notion API Key" "NOTION_API_KEY" "$NOTION_API_KEY")
+echo -e "${YELLOW}Enter your Notion API Key:${NC}"
+echo "(Starts with 'secret_')"
+NOTION=$(prompt_secret "" "NOTION_API_KEY" "$NOTION_API_KEY")
 
 echo ""
-echo -e "${GREEN}Atlassian Configuration (optional)${NC}"
+echo -e "${GREEN}Atlassian Configuration${NC}"
+echo -e "${YELLOW}(Press Enter to skip all Atlassian config if not needed)${NC}"
 echo "Create API token at: https://id.atlassian.com/manage-profile/security/api-tokens"
 echo ""
 
-CONF_URL=$(prompt_value "Confluence URL" "CONFLUENCE_URL" "https://company.atlassian.net/wiki/" "$CONFLUENCE_URL")
-CONF_USER=$(prompt_value "Confluence Username (email)" "CONFLUENCE_USERNAME" "" "$CONFLUENCE_USERNAME")
-CONF_TOKEN=$(prompt_secret "Confluence API Token" "CONFLUENCE_API_TOKEN" "$CONFLUENCE_API_TOKEN")
+echo -e "${YELLOW}[Optional] Enter Confluence URL:${NC}"
+echo "(Example: https://company.atlassian.net/wiki/)"
+CONF_URL=$(prompt_value "" "CONFLUENCE_URL" "https://company.atlassian.net/wiki/" "$CONFLUENCE_URL")
 
-JIRA_URL=$(prompt_value "JIRA URL" "JIRA_URL" "https://company.atlassian.net/" "$JIRA_URL")
-JIRA_USER=$(prompt_value "JIRA Username (email)" "JIRA_USERNAME" "$CONFLUENCE_USERNAME" "$JIRA_USERNAME")
-JIRA_TOKEN=$(prompt_secret "JIRA API Token (or Enter to use same as Confluence)" "JIRA_API_TOKEN" "${CONFLUENCE_API_TOKEN:-$JIRA_API_TOKEN}")
+echo -e "${YELLOW}[Optional] Enter Confluence Username (email):${NC}"
+CONF_USER=$(prompt_value "" "CONFLUENCE_USERNAME" "" "$CONFLUENCE_USERNAME")
+
+echo -e "${YELLOW}[Optional] Enter Confluence API Token:${NC}"
+CONF_TOKEN=$(prompt_secret "" "CONFLUENCE_API_TOKEN" "$CONFLUENCE_API_TOKEN")
+
+echo -e "${YELLOW}[Optional] Enter JIRA URL:${NC}"
+echo "(Example: https://company.atlassian.net/)"
+JIRA_URL=$(prompt_value "" "JIRA_URL" "https://company.atlassian.net/" "$JIRA_URL")
+
+echo -e "${YELLOW}[Optional] Enter JIRA Username (email):${NC}"
+echo "(Press Enter to use same as Confluence)"
+JIRA_USER=$(prompt_value "" "JIRA_USERNAME" "$CONFLUENCE_USERNAME" "$JIRA_USERNAME")
+
+echo -e "${YELLOW}[Optional] Enter JIRA API Token:${NC}"
+echo "(Press Enter to use same as Confluence)"
+JIRA_TOKEN=$(prompt_secret "" "JIRA_API_TOKEN" "${CONFLUENCE_API_TOKEN:-$JIRA_API_TOKEN}")
 
 # Write to environment file
 echo ""
