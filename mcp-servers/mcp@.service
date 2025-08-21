@@ -13,9 +13,8 @@ After=network.target docker.service
 Wants=docker.service
 
 [Service]
-# CHANGE THIS to your actual repo path
-Environment="REPO_PATH=/path/to/alfred-system"
-EnvironmentFile=${REPO_PATH}/mcp-servers/%i/%i.env
+# Note: /path/to/alfred-system will be replaced by deploy.sh with actual repo path
+EnvironmentFile=/path/to/alfred-system/mcp-servers/%i/%i.env
 
 # Using --shell mode for reliable argument passing
 ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell "${SHELL_CMD}"
@@ -23,7 +22,7 @@ Restart=always
 RestartSec=2
 User=root  # Required for Docker access
 Group=root
-WorkingDirectory=${REPO_PATH}/mcp-servers/%i
+WorkingDirectory=/path/to/alfred-system/mcp-servers/%i
 
 [Install]
 WantedBy=multi-user.target
