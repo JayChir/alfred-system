@@ -44,28 +44,6 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alfred
     restart: unless-stopped
 
-  # Filesystem MCP Server  
-  filesystem-mcp:
-    build:
-      context: ./mcp-servers/filesystem
-      dockerfile: Dockerfile
-    ports:
-      - "8002:8002"
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-
-  # Custom Notion MCP Server
-  notion-mcp:
-    build:
-      context: ./mcp-servers/notion
-      dockerfile: Dockerfile
-    ports:
-      - "8003:8003"
-    environment:
-      - NOTION_TOKEN=${NOTION_TOKEN}
-    restart: unless-stopped
-
   # Official MCP Servers
   # Time MCP Server
   time-mcp:
