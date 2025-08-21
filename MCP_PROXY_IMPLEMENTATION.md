@@ -188,7 +188,7 @@ SHELL_CMD=/usr/bin/docker run -i --rm mcp/fetch
 **Notion** (`/etc/mcp/notion.env`):
 ```env
 PORT=7006
-SHELL_CMD=/usr/bin/docker run -i --rm -e NOTION_API_KEY=${NOTION_INTEGRATION_TOKEN} mcp/notion
+SHELL_CMD=/usr/bin/docker run -i --rm -e NOTION_TOKEN=${NOTION_INTEGRATION_TOKEN} mcp/notion
 ```
 
 **Filesystem** (`/etc/mcp/filesystem.env`):
