@@ -17,7 +17,7 @@ Wants=docker.service
 EnvironmentFile=/path/to/alfred-system/mcp-servers/%i/%i.env
 
 # Using --shell mode for reliable argument passing
-ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell "${SHELL_CMD}"
+ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell ${SHELL_CMD}
 Restart=always
 RestartSec=2
 User=root  # Required for Docker access
