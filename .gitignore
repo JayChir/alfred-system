@@ -71,4 +71,5 @@ docker-compose.override.yml
 
 # Secrets
 secrets/
-*.secretmcp-servers/.env
+*.secret
+mcp-servers/.env
