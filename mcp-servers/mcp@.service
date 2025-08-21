@@ -14,6 +14,9 @@ Wants=docker.service
 
 [Service]
 # Note: /path/to/alfred-system will be replaced by deploy.sh with actual repo path
+# Load API keys and tokens (optional, will be ignored if file doesn't exist)
+EnvironmentFile=-/path/to/alfred-system/mcp-servers/.env
+# Load server-specific configuration
 EnvironmentFile=/path/to/alfred-system/mcp-servers/%i/%i.env
 
 # Using --shell mode for reliable argument passing
