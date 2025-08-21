@@ -23,7 +23,8 @@ EnvironmentFile=/path/to/alfred-system/mcp-servers/%i/%i.env
 ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell ${SHELL_CMD}
 Restart=always
 RestartSec=2
-User=root  # Required for Docker access
+# Required for Docker access
+User=root
 Group=root
 WorkingDirectory=/path/to/alfred-system/mcp-servers/%i
 
