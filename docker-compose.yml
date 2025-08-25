@@ -44,37 +44,90 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alfred
     restart: unless-stopped
 
-  # Filesystem MCP Server  
-  filesystem-mcp:
-    build:
-      context: ./mcp-servers/filesystem
-      dockerfile: Dockerfile
+  # Official MCP Servers
+  # Time MCP Server
+  time-mcp:
+    image: mcp/time
     ports:
-      - "8002:8002"
-    volumes:
-      - ./data:/app/data
+      - "3001:3000"
     restart: unless-stopped
 
-  # Custom Notion MCP Server
+  # GitHub Personal MCP Server
+  github-personal-mcp:
+    image: mcp/github
+    ports:
+      - "3002:3000"
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_PERSONAL_TOKEN}
+    restart: unless-stopped
+
+  # GitHub Work MCP Server
+  github-work-mcp:
+    image: mcp/github
+    ports:
+      - "3003:3000"
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_WORK_TOKEN}
+    restart: unless-stopped
+
+  # Fetch MCP Server
+  fetch-mcp:
+    image: mcp/fetch
+    ports:
+      - "3004:3000"
+    restart: unless-stopped
+
+  # Notion MCP Server
   notion-mcp:
-    build:
-      context: ./mcp-servers/notion
-      dockerfile: Dockerfile
+    image: mcp/notion
     ports:
-      - "8003:8003"
+      - "3005:3000"
     environment:
-      - NOTION_TOKEN=${NOTION_TOKEN}
+      - NOTION_API_KEY=${NOTION_TOKEN}
     restart: unless-stopped
 
-  # GitHub MCP Server
-  github-mcp:
-    build:
-      context: ./mcp-servers/github
-      dockerfile: Dockerfile
+  # Sequential Thinking MCP Server
+  sequential-thinking-mcp:
+    image: mcp/sequentialthinking
     ports:
-      - "8004:8004"
+      - "3006:3000"
+    restart: unless-stopped
+
+  # Filesystem MCP Server
+  filesystem-mcp:
+    image: mcp/filesystem
+    ports:
+      - "3007:3000"
+    volumes:
+      - ./data:/data:rw
+    restart: unless-stopped
+
+  # Playwright MCP Server
+  playwright-mcp:
+    image: mcp/playwright
+    ports:
+      - "3008:3000"
+    restart: unless-stopped
+
+  # Memory MCP Server (Official)
+  memory-mcp-official:
+    image: mcp/memory
+    ports:
+      - "3009:3000"
+    restart: unless-stopped
+
+  # Atlassian MCP Server (Confluence + JIRA)
+  atlassian-mcp:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    ports:
+      - "3010:3000"
     environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CONFLUENCE_URL=${CONFLUENCE_URL}
+      - CONFLUENCE_USERNAME=${ATLASSIAN_USERNAME}
+      - CONFLUENCE_API_TOKEN=${ATLASSIAN_API_TOKEN}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${ATLASSIAN_USERNAME}
+      - JIRA_API_TOKEN=${ATLASSIAN_API_TOKEN}
     restart: unless-stopped
 
   # Web interface (Next.js PWA)
