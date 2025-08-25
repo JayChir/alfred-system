@@ -1,0 +1,32 @@
+# Systemd template for MCP proxy services
+# Deploy to: /etc/systemd/system/mcp@.service
+#
+# IMPORTANT: Update REPO_PATH to match where you cloned the alfred-system repo
+# Example: If you cloned to /home/user/alfred-system, set that as REPO_PATH
+#
+# This template handles all MCP servers using instance names
+# Example: mcp@time.service, mcp@github.service, etc.
+
+[Unit]
+Description=MCP proxy for %i (stdio → Streamable HTTP)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+# Note: /path/to/alfred-system will be replaced by deploy.sh with actual repo path
+# Load API keys and tokens (optional, will be ignored if file doesn't exist)
+EnvironmentFile=-/path/to/alfred-system/mcp-servers/.env
+# Load server-specific configuration
+EnvironmentFile=/path/to/alfred-system/mcp-servers/%i/%i.env
+
+# Using --shell mode for reliable argument passing
+ExecStart=/usr/bin/mcp-proxy --port ${PORT} --shell ${SHELL_CMD}
+Restart=always
+RestartSec=2
+# Required for Docker access
+User=root
+Group=root
+WorkingDirectory=/path/to/alfred-system/mcp-servers/%i
+
+[Install]
+WantedBy=multi-user.target
