@@ -4,6 +4,80 @@
 
 This document outlines the implementation plan for hosting multiple MCP servers remotely on our DigitalOcean droplet using the **mcp-proxy** approach. This strategy allows us to expose stdio-based MCP servers as Streamable HTTP endpoints without modifying the original server code.
 
+## Repository Structure
+
+### MCP Server Configuration Directory (`/mcp-servers/`)
+
+```
+mcp-servers/
+├── deploy.sh                    # Deployment script for systemd services
+├── setup-env.sh                 # Interactive environment setup script
+├── .env                         # Shared environment variables (gitignored)
+├── mcp@.service                 # Systemd template unit file
+├── README.md                    # MCP servers documentation
+│
+├── [server-name]/               # Each MCP server has its own directory
+│   ├── [server-name].env        # Server-specific configuration
+│   ├── nginx.conf               # Nginx server block for this MCP server
+│   └── src/                     # Custom server implementation (if any)
+│
+├── time/                        # Time MCP Server (port 7001)
+│   ├── time.env                 # PORT=7001, SHELL_CMD="docker run..."
+│   └── nginx.conf               # mcp-time.artemsys.ai → localhost:7001
+│
+├── sequential-thinking/         # Sequential Thinking MCP (port 7002)
+├── github-personal/             # GitHub Personal MCP (port 7003)
+├── github-work/                 # GitHub Work MCP (port 7004)
+├── fetch/                       # Fetch MCP (port 7005)
+├── notion/                      # Notion MCP (port 7006)
+├── filesystem/                  # Filesystem MCP (port 7007)
+├── playwright/                  # Playwright MCP (port 7008)
+├── memory/                      # Memory MCP (port 7009)
+└── atlassian/                   # Atlassian MCP (port 7010)
+```
+
+### Key Configuration Files
+
+#### 1. **Systemd Template (`mcp@.service`)**
+- Deployed to: `/etc/systemd/system/mcp@.service`
+- Purpose: Template for all MCP server systemd services
+- Loads: `/opt/alfred-system/mcp-servers/.env` + `/opt/alfred-system/mcp-servers/%i/%i.env`
+- Usage: `systemctl start mcp@notion` starts Notion MCP server
+
+#### 2. **Environment Files**
+- **Shared**: `mcp-servers/.env` - API keys, tokens shared across servers
+- **Individual**: `mcp-servers/[server]/.env` - Server-specific PORT and SHELL_CMD
+- **Deployment**: Updated via `setup-env.sh` script with proper validation
+
+#### 3. **Nginx Configuration**
+- **Individual server blocks**: Each server has `nginx.conf` for subdomain routing
+- **Deployed to**: `/etc/nginx/sites-available/mcp-[server].conf`
+- **SSL**: Let's Encrypt certificates for `mcp-[server].artemsys.ai`
+- **Proxy config**: Routes HTTPS → local mcp-proxy port
+
+#### 4. **Deployment Scripts**
+- **`deploy.sh`**: Full infrastructure deployment (systemd, nginx, SSL)
+- **`setup-env.sh`**: Interactive API key and token management
+- **Process**: Handles repo path substitution, certificate requests, service enabling
+
+### Environment Variable Flow
+
+```
+1. User runs setup-env.sh
+   ↓
+2. Creates mcp-servers/.env with shared API keys
+   ↓
+3. systemd loads both .env files:
+   - mcp-servers/.env (shared: NOTION_INTEGRATION_TOKEN, GITHUB_*)
+   - mcp-servers/[server]/[server].env (specific: PORT, SHELL_CMD)
+   ↓
+4. mcp-proxy starts with environment variables
+   ↓
+5. Docker container receives environment variables
+   ↓
+6. MCP server authenticates with APIs using tokens
+```
+
 ## Architecture
 
 ```
@@ -278,14 +352,14 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### Phase 5: TLS with Let's Encrypt (15 minutes)
+### Phase 5: TLS with Let's Encrypt (15 minutes) ✅ COMPLETED
 
 ```bash
 # Install certbot
 sudo apt install certbot python3-certbot-nginx
 
 # Request certificates for all subdomains
-sudo certbot --nginx \
+sudo certbot --nginx --non-interactive --agree-tos --email your-email@domain.com \
   -d mcp-time.artemsys.ai \
   -d mcp-github-personal.artemsys.ai \
   -d mcp-github-work.artemsys.ai \
@@ -301,7 +375,13 @@ sudo certbot --nginx \
 sudo certbot renew --dry-run
 ```
 
-### Phase 6: Deploy and Test (30 minutes)
+**STATUS: COMPLETED ✅**
+- All SSL certificates successfully deployed
+- All HTTPS endpoints verified working
+- DNS records added to Cloudflare
+- Auto-renewal configured
+
+### Phase 6: Deploy and Test (30 minutes) ✅ COMPLETED
 
 #### Start Services
 
@@ -346,57 +426,312 @@ sudo journalctl -u mcp@time -f
 sudo journalctl -u 'mcp@*' -f
 ```
 
-### Phase 7: Update Local Configuration (10 minutes)
+**STATUS: COMPLETED ✅**
+- All 10 MCP services deployed and running via systemd
+- Environment variables properly configured for all services
+- Notion MCP authentication fixed with Bearer tokens
+- All HTTP endpoints operational and serving requests
+- Infrastructure fully operational on droplet
+
+### Phase 7: Update Local Configuration (10 minutes) ✅ COMPLETED
 
 #### Update Claude Desktop Configuration
 
-Update your local `~/.claude.json` to use remote MCP servers:
+**CORRECT FORMAT**: Use `http` type for mcp-proxy endpoints:
+
+```json
+{
+  "mcpServers": {
+    "time-remote": {
+      "type": "http",
+      "url": "https://mcp-time.artemsys.ai/mcp"
+    },
+    "github-personal-remote": {
+      "type": "http", 
+      "url": "https://mcp-github-personal.artemsys.ai/mcp"
+    },
+    "github-work-remote": {
+      "type": "http",
+      "url": "https://mcp-github-work.artemsys.ai/mcp"
+    },
+    "fetch-remote": {
+      "type": "http",
+      "url": "https://mcp-fetch.artemsys.ai/mcp"
+    },
+    "notion-remote": {
+      "type": "http",
+      "url": "https://mcp-notion.artemsys.ai/mcp"
+    },
+    "sequential-thinking-remote": {
+      "type": "http",
+      "url": "https://mcp-sequential.artemsys.ai/mcp"
+    },
+    "filesystem-remote": {
+      "type": "http",
+      "url": "https://mcp-filesystem.artemsys.ai/mcp"
+    },
+    "playwright-remote": {
+      "type": "http",
+      "url": "https://mcp-playwright.artemsys.ai/mcp"
+    },
+    "memory-remote": {
+      "type": "http",
+      "url": "https://mcp-memory.artemsys.ai/mcp"
+    },
+    "atlassian-remote": {
+      "type": "http",
+      "url": "https://mcp-atlassian.artemsys.ai/mcp"
+    }
+  }
+}
+```
+
+**STATUS: INFRASTRUCTURE COMPLETE ✅ - CLIENT CONFIG COMPLETE ✅**
+- SSL certificates deployed for all 10 subdomains ✅
+- All HTTPS endpoints verified working ✅  
+- DNS records configured in Cloudflare ✅
+- All MCP services running and operational ✅
+- Notion MCP authentication fixed ✅
+- Claude client successfully connecting to remote MCPs ✅
+
+## Current Status Summary (August 25, 2025)
+
+### ✅ COMPLETED PHASES
+1. **Infrastructure Setup**: Node.js, mcp-proxy, systemd templates ✅
+2. **Server Configuration**: All 10 MCP servers deployed with env files ✅
+3. **Nginx Reverse Proxy**: All server blocks configured ✅
+4. **SSL/TLS Setup**: Let's Encrypt certificates for all subdomains ✅
+5. **DNS Configuration**: All mcp-*.artemsys.ai records pointing to droplet ✅
+6. **End-to-End Testing**: HTTPS endpoints responding correctly ✅
+7. **Client Configuration**: Claude Code successfully connecting to remote MCPs ✅
+8. **Authentication Fixes**: Notion MCP Bearer token authentication resolved ✅
+
+### 🎯 PROJECT STATUS: COMPLETE ✅
+- **All 10+ MCP servers operational** via HTTPS endpoints
+- **Environment variables properly managed** with setup scripts
+- **Authentication working** for all services requiring API keys
+- **Infrastructure deployed and stable** on DigitalOcean droplet
+- **Client successfully connecting** to remote MCP services
+
+### 📋 MAINTENANCE NOTES
+- **Cert renewal**: Auto-renewal configured via Let's Encrypt
+- **Service monitoring**: All systemd services running and auto-restart on failure  
+- **Log management**: Services logging to systemd journals
+- **Security**: All endpoints secured with SSL/TLS
+
+## Client Configuration
+
+### Claude Code (Terminal) Configuration
+
+Claude Code uses the `claude mcp add` command with HTTP transport for remote MCP servers:
+
+```bash
+# Add all remote MCP servers to Claude Code
+# Time server
+claude mcp add time --scope user --transport http https://mcp-time.artemsys.ai/mcp
+
+# GitHub Personal
+claude mcp add github-personal --scope user --transport http https://mcp-github-personal.artemsys.ai/mcp
+
+# GitHub Work
+claude mcp add github-work --scope user --transport http https://mcp-github-work.artemsys.ai/mcp
+
+# Notion
+claude mcp add notion --scope user --transport http https://mcp-notion.artemsys.ai/mcp
+
+# Fetch
+claude mcp add fetch --scope user --transport http https://mcp-fetch.artemsys.ai/mcp
+
+# Sequential Thinking
+claude mcp add sequential-thinking --scope user --transport http https://mcp-sequential.artemsys.ai/mcp
+
+# Filesystem
+claude mcp add filesystem --scope user --transport http https://mcp-filesystem.artemsys.ai/mcp
+
+# Playwright
+claude mcp add playwright --scope user --transport http https://mcp-playwright.artemsys.ai/mcp
+
+# Memory
+claude mcp add memory --scope user --transport http https://mcp-memory.artemsys.ai/mcp
+
+# Atlassian
+claude mcp add atlassian --scope user --transport http https://mcp-atlassian.artemsys.ai/mcp
+```
+
+**Key Configuration Points:**
+- `--scope user`: User-level configuration (not project-specific)
+- `--transport http`: Uses HTTP transport for remote endpoints
+- All endpoints use HTTPS with SSL certificates
+
+### Claude Desktop Configuration
+
+Claude Desktop requires `mcp-remote` package for HTTP transport. Configuration in `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "time": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-time.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-time.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "github-personal": {
-      "command": "curl", 
-      "args": ["-X", "POST", "https://mcp-github-personal.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-github-personal.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "github-work": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-github-work.artemsys.ai/mcp"]
-    },
-    "fetch": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-fetch.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-github-work.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "notion": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-notion.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-notion.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
+    },
+    "fetch": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-fetch.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "sequential-thinking": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-sequential.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-sequential.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "filesystem": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-filesystem.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-filesystem.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "playwright": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-playwright.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-playwright.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "memory": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-memory.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-memory.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     },
     "atlassian": {
-      "command": "curl",
-      "args": ["-X", "POST", "https://mcp-atlassian.artemsys.ai/mcp"]
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp-atlassian.artemsys.ai/mcp",
+        "--allow-http",
+        "--timeout", "100000",
+        "--http-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "C:\\Users\\chiruvolu jay\\AppData\\Roaming\\Claude\\zscaler_ca.cer"
+      }
     }
   }
 }
+```
+
+**Key Configuration Points:**
+- **`mcp-remote` package**: Required for HTTP transport in Claude Desktop
+- **`--allow-http`**: Allows HTTP/HTTPS connections
+- **`--timeout 100000`**: Extended timeout for enterprise environments
+- **`--http-only`**: Forces HTTP-only mode (no stdio fallback)
+- **`NODE_EXTRA_CA_CERTS`**: Corporate certificate authority for Zscaler proxy
+
+### Configuration Differences
+
+| Aspect | Claude Code | Claude Desktop |
+|--------|-------------|----------------|
+| **Command** | `claude mcp add` | Manual JSON config |
+| **Transport** | Native HTTP support | Requires `mcp-remote` |
+| **Scope** | `--scope user` | Global config file |
+| **Corporate Proxy** | Auto-handled | Requires CA cert path |
+| **Timeouts** | Default | Manual `--timeout` |
+
+### Testing Client Configuration
+
+```bash
+# Claude Code - verify MCP servers
+claude mcp list
+claude mcp view notion
+
+# Claude Desktop - test specific server
+curl -i https://mcp-notion.artemsys.ai/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"clientInfo":{"name":"test","version":"1.0.0"}}}'
 ```
 
 ## Advantages of This Approach
@@ -486,6 +821,45 @@ sudo certbot certificates
 - **Firewall**: Restrict access to necessary ports only
 - **Secrets management**: Use systemd credentials or external secret management
 - **Log rotation**: Configure log rotation for service logs
+
+## Remote Client Configuration
+
+### Working HTTP Client Format
+
+```json
+{
+  "mcpServers": {
+    "time": {
+      "type": "http",
+      "url": "https://mcp-time.artemsys.ai/mcp"
+    },
+    "sequential-thinking": {
+      "type": "http",
+      "url": "https://mcp-sequential.artemsys.ai/mcp"
+    }
+  }
+}
+```
+
+### Configuration Locations to Check
+
+1. **Global User Settings**: `~/.claude/settings.json`
+2. **Project-Specific**: `.mcp.json` in project directory  
+3. **Main Config**: `~/.claude.json` (mcpServers section)
+4. **Environment Variables**: MCP server definitions
+5. **Test Config**: `~/.claude-remote-test.json` (working format verified)
+
+### Client Testing Commands
+
+```bash
+# Test with specific config file
+claude --mcp-config ~/.claude-remote-test.json --strict-mcp-config
+
+# Test HTTP endpoint directly
+curl -i https://mcp-time.artemsys.ai/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"clientInfo":{"name":"test","version":"1.0.0"}}}'
+```
 
 ## Future Enhancements
 
