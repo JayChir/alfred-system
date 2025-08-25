@@ -83,7 +83,7 @@ services:
     ports:
       - "3005:3000"
     environment:
-      - NOTION_API_KEY=${NOTION_TOKEN}
+      - NOTION_TOKEN=${NOTION_TOKEN}
     restart: unless-stopped
 
   # Sequential Thinking MCP Server
