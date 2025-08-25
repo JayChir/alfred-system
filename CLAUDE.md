@@ -1,0 +1,1 @@
+- remember my ask to give me 1 line of explanation as to what and why you're doing with that line for every command
