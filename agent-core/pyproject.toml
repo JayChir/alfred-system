@@ -1,0 +1,86 @@
+[project]
+name = "agent-core"
+version = "0.1.0"
+description = "Alfred Agent Core - FastAPI-based AI agent with MCP routing, OAuth, and caching"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI stack
+    "fastapi[all]>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+
+    # Pydantic AI for agent orchestration
+    "pydantic-ai>=0.0.1b8",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.0",
+    "psycopg[binary]>=3.1.0",
+    "alembic>=1.12.0",
+
+    # Crypto for token encryption
+    "cryptography>=41.0.0",
+
+    # HTTP clients for MCP
+    "httpx>=0.25.0",
+    "websockets>=12.0",
+
+    # Anthropic client
+    "anthropic>=0.7.0",
+
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "structlog>=23.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Linting and formatting
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+
+    # Testing
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",  # for FastAPI test client
+
+    # Development tools
+    "pre-commit>=3.4.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B"]  # Removed "N" to allow camelCase for API compatibility
+ignore = ["E501"]  # Line too long (handled by black)
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "ruff>=0.12.10",
+]
