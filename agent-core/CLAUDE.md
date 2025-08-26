@@ -27,7 +27,7 @@ This file provides guidance to Claude Code when working in the agent-core direct
 ### Work Packet Approach
 **Use the predefined work packets from README.md:**
 - **Packet A (Week 1)**: FastAPI skeleton + MCP Router + in-memory cache
-- **Packet B (Week 2)**: Notion OAuth + per-user MCP sessions + encryption  
+- **Packet B (Week 2)**: Notion OAuth + per-user MCP sessions + encryption
 - **Packet C (Week 3)**: PostgreSQL sessions/cache + token metering
 - **Packet D (Week 4)**: SSE streaming + hardening + tests
 
@@ -35,14 +35,14 @@ This file provides guidance to Claude Code when working in the agent-core direct
 
 ### Stack Requirements
 - **FastAPI** for web framework
-- **Pydantic AI** for agent orchestration 
+- **Pydantic AI** for agent orchestration
 - **PostgreSQL** for sessions, cache, and OAuth tokens
 - **MCP (Model Context Protocol)** for tool routing
 - **Python 3.11+** with modern package management
 
 ### Performance Targets
 - **≤3s P95 latency** for cached reads
-- **~90% cache hit rate** on repeated reads  
+- **~90% cache hit rate** on repeated reads
 - **80% token reduction** vs uncached baselines
 - **Single droplet deployment** ($50-100/mo budget)
 
@@ -85,8 +85,59 @@ This file provides guidance to Claude Code when working in the agent-core direct
 
 ## Development Best Practices
 
+### Git Workflow - Merge As You Go
+**IMPORTANT**: Follow a "merge as you go" strategy to maintain code quality and prevent conflicts.
+
+#### Why Merge Frequently
+- **Smaller PRs**: Easier to review (aim for <500 lines per PR)
+- **Avoid conflicts**: Long-lived branches accumulate merge conflicts
+- **Progressive stability**: Each merge is a stable checkpoint
+- **Clear history**: One PR = One issue = Easy to track changes
+- **Rollback safety**: Smaller changes are easier to revert if needed
+
+#### Workflow Pattern
+```bash
+# 1. Start from updated main
+git checkout main
+git pull origin main
+
+# 2. Create feature branch for ONE issue
+git checkout -b feat/<issue-number>-<short-description>
+# Example: feat/6-env-loader
+
+# 3. Implement the issue
+# ... make changes ...
+
+# 4. Commit with conventional commits
+git add -A
+git commit -m "feat(component): implement issue #X
+
+- Detailed description
+- What was implemented
+- Any important notes
+
+Closes #X"
+
+# 5. Push and create PR
+git push -u origin feat/<issue-number>-<short-description>
+gh pr create --title "feat(component): Issue #X - Description" \
+  --body "..." --assignee @me
+
+# 6. After PR approval, merge to main
+# Then immediately start next issue from fresh main
+```
+
+#### When to Bundle Issues
+Only combine multiple issues in one PR if they are:
+- **Tiny** (<50 lines each)
+- **Tightly coupled** (one doesn't work without the other)
+- **Same logical unit** (e.g., model + migration + schema)
+
+Otherwise, **always prefer separate PRs**.
+
 ### Task Management
 - **One issue per branch**: `feat/<issue-number>-<slug>`
+- **Merge before next issue**: Don't stack unmerged work
 - **AC verification**: Include acceptance criteria verification in PRs
 - **Commit messages**: Follow conventional commits with descriptive bodies
 - **Work in packets**: Complete logical chunks before moving to next component
@@ -104,7 +155,7 @@ command args
 
 **Required explanations for:**
 - Package installations: what library does and why needed
-- Database operations: what migration/query accomplishes  
+- Database operations: what migration/query accomplishes
 - Docker commands: what container operation is happening
 - Git operations: what change is being tracked
 - File operations: what files are being modified and purpose
@@ -137,7 +188,7 @@ pip install fastapi[all]
 ```python
 personal_memory:create_entities([{
   "name": "Agent Core Session YYYY-MM-DD",
-  "entityType": "development_session", 
+  "entityType": "development_session",
   "observations": [
     "Working on Week N MVP development - [specific component]",
     "Key decisions: [technical choices made]",
@@ -149,7 +200,7 @@ personal_memory:create_entities([{
 # Build relationships between sessions and components
 personal_memory:create_relations([{
   "from": "Agent Core Session YYYY-MM-DD",
-  "to": "MVP Week N Milestone", 
+  "to": "MVP Week N Milestone",
   "relationType": "CONTRIBUTES_TO"
 }])
 ```
@@ -170,13 +221,13 @@ notion:create-pages
   parent: {"database_id": "edfeee6d276b4cbfa84c2a8e15864e24"}
   properties: {
     "Session Summary": "[YYYY-MM-DD] Agent Core MVP - [component/milestone]",
-    "System": "Claude Code", 
+    "System": "Claude Code",
     "Session Date": "Month DD, YYYY HH:MM-HH:MM AM/PM PST",
     "Key Outcomes": "• Code component completed\n• Architecture decision made\n• Performance milestone achieved",
     "Next Goals": "• Next component to build\n• Tests to write\n• Integration to complete",
     "Session Notes": "Detailed technical context, code patterns learned, blockers resolved...",
-    "Project": "[\"alfred-agent-core-page-id\"]", 
-    "Tags": "[\"#deep-work\", \"#system-design\"]" 
+    "Project": "[\"alfred-agent-core-page-id\"]",
+    "Tags": "[\"#deep-work\", \"#system-design\"]"
   }
 ```
 
@@ -189,7 +240,7 @@ notion:create-pages
 
 ### Notion Integration
 - Track major milestones and architectural decisions
-- Document deployment steps and configuration  
+- Document deployment steps and configuration
 - Log security considerations and token handling approaches
 
 ## Environment Setup
@@ -203,7 +254,7 @@ notion:create-pages
 ### Development Commands (to implement in Makefile)
 ```bash
 make run          # Start development server
-make test         # Run test suite  
+make test         # Run test suite
 make lint         # Lint and format code
 make db-migrate   # Run database migrations
 make docker-build # Build container
@@ -229,15 +280,15 @@ make docker-build # Build container
 ### Cache Key Format
 ```python
 # Cache keys use this standardized format for consistency
-# Example: "notion.get_page:v1:a1b2c3d4" 
+# Example: "notion.get_page:v1:a1b2c3d4"
 "{tool}:{version}:{normalized_args_hash}"
 
 # tool: The MCP tool name (e.g., "notion.get_page", "github.get_repo")
-# version: Schema version to handle breaking changes (e.g., "v1", "v2") 
+# version: Schema version to handle breaking changes (e.g., "v1", "v2")
 # normalized_args_hash: SHA256 hash of sorted/normalized arguments
 ```
 
-### Error Response Format  
+### Error Response Format
 ```python
 # Standardized error responses for debugging and client handling
 {
@@ -264,21 +315,21 @@ class ChatRequest(BaseModel):
 # FastAPI router groups related endpoints
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
-@router.post("/chat") 
+@router.post("/chat")
 async def chat_endpoint(
     request: ChatRequest,                    # Pydantic validation
     request_id: str = Depends(get_request_id)  # Dependency injection
 ):
     """
     Main chat endpoint that processes messages through MCP tools.
-    
+
     Args:
         request: Validated chat request with messages and options
         request_id: Unique identifier injected for request tracing
-        
+
     Returns:
         ChatResponse with reply and metadata
-        
+
     Raises:
         HTTPException: For validation errors or system failures
     """
@@ -293,13 +344,13 @@ async def chat_endpoint(
 **Key Components**: Health endpoint, chat endpoint, MCP router, thin cache
 **Success Metric**: Can call ≥2 remote MCP tools with cache hit logging
 
-### Week 2 (MVP-W2) — OAuth & Security  
+### Week 2 (MVP-W2) — OAuth & Security
 **Goal**: Notion OAuth with encrypted token storage
 **Key Components**: OAuth flow, token encryption, per-user MCP sessions
 **Success Metric**: End-to-end Notion connection with hosted MCP
 
 ### Week 3 (MVP-W3) — Persistence & Sessions
-**Goal**: PostgreSQL backend with session management  
+**Goal**: PostgreSQL backend with session management
 **Key Components**: Session store, cache persistence, token metering
 **Success Metric**: >70% cache hit rate, session continuity
 
@@ -331,7 +382,7 @@ curl -w "@curl-format.txt" -s -X POST localhost:8080/chat \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"repeat call"}]}'
 
-# Cache hit verification  
+# Cache hit verification
 # First call: cacheHit: false
 # Second call: cacheHit: true
 ```
