@@ -10,9 +10,11 @@ from typing import Dict
 from fastapi import APIRouter, Depends, status
 
 from src.config import Settings, get_settings
+from src.utils.logging import get_logger
 
 # Create router for health endpoints
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 @router.get(
@@ -35,6 +37,9 @@ async def health_check(
     Example response:
         {"status": "ok", "version": "0.1.0"}
     """
+    # Log health check (at debug level to avoid noise)
+    logger.debug("Health check requested")
+
     # TODO: Add deeper health checks in the future:
     # - Database connectivity (Week 3)
     # - MCP service availability (Week 1)

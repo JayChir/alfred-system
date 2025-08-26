@@ -7,12 +7,9 @@ from environment variables via the config module.
 """
 
 import sys
-import time
-import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
-import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,27 +18,9 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Settings, get_settings
+from src.middleware.logging import LoggingMiddleware, PerformanceLoggingMiddleware
 from src.routers import chat, health
-
-# Configure structured logging
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.dev.ConsoleRenderer(),
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    cache_logger_on_first_use=True,
-)
-
-logger = structlog.get_logger(__name__)
+from src.utils.logging import configure_logging, get_logger
 
 
 def validate_configuration() -> Settings:
@@ -56,6 +35,17 @@ def validate_configuration() -> Settings:
     """
     try:
         settings = get_settings()
+
+        # Configure logging before using logger
+        configure_logging(
+            log_level=settings.log_level,
+            app_env=settings.app_env,
+            app_version=settings.app_version,
+        )
+
+        # Get logger after configuration
+        logger = get_logger(__name__)
+
         logger.info(
             "Configuration validated successfully",
             app_env=settings.app_env,
@@ -64,7 +54,8 @@ def validate_configuration() -> Settings:
         )
         return settings
     except ValidationError as e:
-        logger.error("Configuration validation failed")
+        # Basic logging for configuration errors (before structured logging is set up)
+        print("Configuration validation failed", file=sys.stderr)
         print("\n" + "=" * 60)
         print("CONFIGURATION ERROR - Application cannot start")
         print("=" * 60)
@@ -93,13 +84,17 @@ def validate_configuration() -> Settings:
 
         sys.exit(1)
     except Exception as e:
-        logger.error("Unexpected error during configuration", error=str(e))
+        # Can't use logger here as it may not be configured yet
+        print(f"Unexpected error during configuration: {e}", file=sys.stderr)
         print(f"\n❌ Unexpected configuration error: {e}")
         sys.exit(1)
 
 
 # Load and validate configuration before creating app
 settings = validate_configuration()
+
+# Get logger instance after configuration
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -114,7 +109,8 @@ async def lifespan(app: FastAPI):
     """
     # Startup tasks
     logger.info(
-        f"Starting {settings.app_name}",
+        "Application starting",
+        app_name=settings.app_name,
         version=settings.app_version,
         environment=settings.app_env,
     )
@@ -135,7 +131,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown tasks
-    logger.info(f"Shutting down {settings.app_name}...")
+    logger.info("Application shutting down", app_name=settings.app_name)
     # TODO: Close connections, flush cache, etc.
 
 
@@ -150,29 +146,9 @@ app = FastAPI(
 )
 
 
-# Middleware for request ID injection
-@app.middleware("http")
-async def add_request_id(request: Request, call_next):
-    """
-    Middleware to add a unique request ID to each request.
-    This ID is used for tracing and debugging across logs.
-    """
-    # Generate or extract request ID
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-
-    # Store in request state for access in handlers
-    request.state.request_id = request_id
-
-    # Process request
-    start_time = time.time()
-    response = await call_next(request)
-
-    # Add request ID and timing to response headers
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Response-Time"] = f"{(time.time() - start_time) * 1000:.2f}ms"
-
-    return response
-
+# Add structured logging middleware
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
 
 # CORS configuration from environment settings
 app.add_middleware(
@@ -258,8 +234,16 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     """
     request_id = getattr(request.state, "request_id", "unknown")
 
-    # TODO: Add proper logging with structlog (Issue #7)
-    print(f"Unhandled exception for request {request_id}: {exc}")
+    # Log the unhandled exception with full context
+    logger.error(
+        "Unhandled exception occurred",
+        request_id=request_id,
+        error=str(exc),
+        error_type=type(exc).__name__,
+        path=str(request.url.path),
+        method=request.method,
+        exc_info=True,  # Include full stack trace
+    )
 
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
