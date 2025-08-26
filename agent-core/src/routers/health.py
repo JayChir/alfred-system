@@ -7,7 +7,9 @@ to verify the service is running and healthy.
 
 from typing import Dict
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
+
+from src.config import Settings, get_settings
 
 # Create router for health endpoints
 router = APIRouter()
@@ -21,7 +23,9 @@ router = APIRouter()
     description="Returns service health status and version information",
     response_description="Service is healthy",
 )
-async def health_check() -> Dict[str, str]:
+async def health_check(
+    settings: Settings = Depends(get_settings),  # noqa: B008
+) -> Dict[str, str]:
     """
     Health check endpoint for monitoring and load balancer probes.
 
@@ -31,9 +35,6 @@ async def health_check() -> Dict[str, str]:
     Example response:
         {"status": "ok", "version": "0.1.0"}
     """
-    # Import here to avoid circular dependency
-    from src.app import APP_VERSION
-
     # TODO: Add deeper health checks in the future:
     # - Database connectivity (Week 3)
     # - MCP service availability (Week 1)
@@ -41,7 +42,8 @@ async def health_check() -> Dict[str, str]:
 
     return {
         "status": "ok",
-        "version": APP_VERSION,
+        "version": settings.app_version,
+        "environment": settings.app_env,
     }
 
 
