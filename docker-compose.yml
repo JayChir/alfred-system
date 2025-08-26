@@ -4,17 +4,18 @@ services:
   # Main agent server
   alfred-agent:
     build: 
-      context: ./agent
+      context: ./agent-core
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alfred
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - MODEL_PROVIDER=anthropic
+      - MODEL_NAME=claude-3-5-sonnet-20241022
     depends_on:
       - postgres
     volumes:
-      - ./agent:/app
+      - ./agent-core:/app
     restart: unless-stopped
 
   # PostgreSQL database
@@ -138,7 +139,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://alfred-agent:8000
+      - NEXT_PUBLIC_API_URL=http://alfred-agent:8080
     depends_on:
       - alfred-agent
     restart: unless-stopped

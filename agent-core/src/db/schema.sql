@@ -1,0 +1,2 @@
+-- Database schema
+-- TODO: Define tables for users, notion_connections, user_sessions, agent_cache
