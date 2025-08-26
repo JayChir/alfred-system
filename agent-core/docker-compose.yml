@@ -1,2 +1,96 @@
-# Local development compose
-# TODO: Implement development environment
+version: '3.8'
+
+services:
+  # Main application service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # FastAPI settings
+      - APP_ENV=${APP_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # API Keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - API_KEY=${API_KEY}
+
+      # Database connection (for Week 3)
+      - DATABASE_URL=${DATABASE_URL:-postgresql://alfred:password@db:5432/agent_core}
+
+      # Notion OAuth (for Week 2)
+      - NOTION_CLIENT_ID=${NOTION_CLIENT_ID}
+      - NOTION_CLIENT_SECRET=${NOTION_CLIENT_SECRET}
+      - NOTION_REDIRECT_URI=${NOTION_REDIRECT_URI:-http://localhost:8080/oauth/notion/callback}
+
+      # Security
+      - FERNET_KEY=${FERNET_KEY}
+
+      # MCP Configuration
+      - MCP_TIMEOUT=${MCP_TIMEOUT:-30000}
+    volumes:
+      # Mount source code for development hot-reloading
+      - ./src:/app/src:ro
+      # Mount .env file if it exists
+      - ./.env:/app/.env:ro
+    networks:
+      - alfred-network
+    depends_on:
+      - db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL database (for Week 3)
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=alfred
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=agent_core
+    volumes:
+      # Persist database data
+      - postgres_data:/var/lib/postgresql/data
+      # Initialize with schema (when we have it)
+      # - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - alfred-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alfred -d agent_core"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching (optional enhancement)
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - alfred-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  alfred-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
