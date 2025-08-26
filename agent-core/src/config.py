@@ -6,15 +6,51 @@ It provides type safety, validation, and automatic loading from environment vari
 and .env files. All settings are validated at startup to fail fast with clear errors.
 """
 
+import json
 import secrets
-from typing import Optional
+from typing import Annotated, Any, List, Optional
 
 import structlog
-from pydantic import Field, ValidationError, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    BeforeValidator,
+    Field,
+    ValidationError,
+    field_validator,
+)
 from pydantic.networks import HttpUrl, PostgresDsn
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = structlog.get_logger(__name__)
+
+
+def parse_cors(v: Any) -> List[str]:
+    """
+    Parse CORS origins from various input formats.
+
+    Supports:
+    - Native Python list (from code/tests)
+    - JSON array string: '["https://api.example.com", "https://app.example.com"]'
+    - Comma-separated string: 'https://api.example.com,https://app.example.com'
+    - Empty string or None: returns empty list
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        # Handle JSON array format
+        if s.startswith("["):
+            return json.loads(s)
+        # Parse comma-separated values
+        return [origin.strip() for origin in s.split(",") if origin.strip()]
+    return v
+
+
+# Create reusable type annotation for CORS origins
+# NoDecode prevents automatic JSON parsing, BeforeValidator applies our custom parser
+CorsOrigins = Annotated[List[AnyHttpUrl], NoDecode, BeforeValidator(parse_cors)]
 
 
 class Settings(BaseSettings):
@@ -53,9 +89,9 @@ class Settings(BaseSettings):
         min_length=32,
     )
 
-    cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:8080",
-        description="Comma-separated list of allowed CORS origins",
+    cors_origins: CorsOrigins = Field(
+        default=["http://localhost:3000", "http://localhost:8080"],
+        description="List of allowed CORS origins (JSON array or comma-separated in env)",
     )
 
     # ===== Server Configuration =====
@@ -167,6 +203,26 @@ class Settings(BaseSettings):
 
     # ===== Validators =====
 
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, origins: List[AnyHttpUrl], info) -> List[AnyHttpUrl]:
+        """
+        Validate CORS origins for security.
+
+        - Prevents wildcard (*) in production
+        - Ensures all origins are valid URLs (AnyHttpUrl handles this)
+        """
+        # Get app_env from the data being validated
+        app_env = info.data.get("app_env", "development")
+
+        # Check for wildcard in production
+        if app_env == "production":
+            for origin in origins:
+                if str(origin) == "*":
+                    raise ValueError("CORS wildcard (*) not allowed in production")
+
+        return origins
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -215,32 +271,25 @@ class Settings(BaseSettings):
             return secret
         return v
 
-    @field_validator("cors_origins")
-    @classmethod
-    def parse_cors_origins(cls, v: str) -> list:
-        """Parse comma-separated CORS origins into a list."""
-        if not v:
-            return []
-        return [origin.strip() for origin in v.split(",") if origin.strip()]
-
     # ===== Pydantic Config =====
 
-    model_config = {
-        "env_file": ".env",  # Load from .env file
-        "env_file_encoding": "utf-8",
-        "case_sensitive": False,  # Accept API_KEY or api_key
-        "extra": "ignore",  # Ignore extra env variables
+    model_config = SettingsConfigDict(
+        env_file=".env",  # Load from .env file
+        env_file_encoding="utf-8",
+        case_sensitive=False,  # Accept API_KEY or api_key
+        extra="ignore",  # Ignore extra env variables
         # Add field descriptions to schema
-        "json_schema_extra": {
+        json_schema_extra={
             "examples": [
                 {
                     "api_key": "your-secure-api-key-min-32-chars-long",
                     "anthropic_api_key": "sk-ant-api03-...",
                     "database_url": "postgresql://user:password@localhost:5432/agent_core",
+                    "cors_origins": ["http://localhost:3000", "http://localhost:8080"],
                 }
             ]
         },
-    }
+    )
 
     def log_config(self) -> None:
         """Log configuration (with secrets masked)."""
@@ -285,8 +334,8 @@ class Settings(BaseSettings):
                     "DEBUG log level in production - consider using INFO or higher"
                 )
 
-            if self.cors_origins == "*":
-                errors.append("CORS wildcard (*) not allowed in production")
+            # CORS wildcard check is now handled in the field validator
+            # but we can add additional checks here if needed
 
             if errors:
                 raise ValueError(
