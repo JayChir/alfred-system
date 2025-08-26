@@ -8,25 +8,19 @@ dependencies = [
     # FastAPI stack
     "fastapi[all]>=0.104.0",
     "uvicorn[standard]>=0.24.0",
-
     # Pydantic AI for agent orchestration
-    "pydantic-ai>=0.0.1b8",
-
+    "pydantic-ai[logfire,mcp]>=0.0.1b8",
     # Database
     "sqlalchemy[asyncio]>=2.0.0",
     "psycopg[binary]>=3.1.0",
     "alembic>=1.12.0",
-
     # Crypto for token encryption
     "cryptography>=41.0.0",
-
     # HTTP clients for MCP
     "httpx>=0.25.0",
     "websockets>=12.0",
-
     # Anthropic client
     "anthropic>=0.7.0",
-
     # Utilities
     "python-dotenv>=1.0.0",
     "structlog>=23.1.0",
