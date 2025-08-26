@@ -1,6 +1,6 @@
 # Multi-stage build for Alfred Agent Core
 # Stage 1: Builder with uv for fast dependency installation
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # Install uv for fast package management
 # Using the official installation script for portability
@@ -19,6 +19,8 @@ RUN uv sync --frozen --no-install-project
 # Copy source code
 COPY src/ ./src/
 COPY main.py ./
+# Copy README.md for pyproject.toml reference
+COPY README.md ./
 
 # Install the project itself
 RUN uv sync --frozen
@@ -49,7 +51,7 @@ USER alfred
 
 # Set Python path to use the virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app:$PYTHONPATH"
+ENV PYTHONPATH="/app"
 
 # Expose port
 EXPOSE 8080

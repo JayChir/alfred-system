@@ -44,11 +44,11 @@ htmlcov/
 *~
 .DS_Store
 
-# Documentation
-*.md
+# Documentation (except README.md which is needed for pyproject.toml)
 docs/
-README.md
 CLAUDE.md
+*.md
+!README.md
 
 # Test files
 tests/
