@@ -151,9 +151,12 @@ app.add_middleware(LoggingMiddleware)
 app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
 
 # CORS configuration from environment settings
+# Convert AnyHttpUrl objects to strings for FastAPI
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,  # Loaded from environment
+    allow_origins=[
+        str(origin) for origin in settings.cors_origins
+    ],  # Convert URLs to strings
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],

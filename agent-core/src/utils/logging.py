@@ -16,7 +16,9 @@ import structlog
 from structlog.types import EventDict, Processor
 
 # Context variable for request-scoped data
-request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+request_context: ContextVar[Dict[str, Any]] = ContextVar(
+    "request_context", default=None
+)
 
 
 class RequestContextProcessor:
@@ -32,7 +34,7 @@ class RequestContextProcessor:
     ) -> EventDict:
         """Add request context to the event dict."""
         ctx = request_context.get()
-        if ctx:
+        if ctx is not None:
             # Add request context fields to the log entry
             event_dict.update(ctx)
         return event_dict
@@ -216,13 +218,15 @@ def set_request_context(**kwargs: Any) -> None:
         set_request_context(request_id="123", user_id="456", method="POST", path="/api/chat")
     """
     ctx = request_context.get()
+    if ctx is None:
+        ctx = {}
     ctx.update(kwargs)
     request_context.set(ctx)
 
 
 def clear_request_context() -> None:
     """Clear the request context (should be called at the end of each request)."""
-    request_context.set({})
+    request_context.set(None)
 
 
 def log_with_context(
