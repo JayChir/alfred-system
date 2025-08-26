@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from src.config import Settings, get_settings
+from src.utils.logging import get_logger
 
 # Create router for chat endpoints
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 # Pydantic models for request/response validation
@@ -130,6 +132,10 @@ async def verify_api_key(
     TODO: Implement proper auth with JWT in production (Week 4).
     """
     if not x_api_key or x_api_key != settings.api_key:
+        logger.warning(
+            "Invalid API key attempt",
+            provided_key_prefix=x_api_key[:8] if x_api_key else None,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
@@ -174,6 +180,15 @@ async def chat_endpoint(
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
 
+    # Log chat request details
+    logger.info(
+        "Chat request received",
+        request_id=request_id,
+        message_count=len(chat_request.messages),
+        has_session=bool(chat_request.session),
+        force_refresh=chat_request.forceRefresh,
+    )
+
     # TODO: Implement actual agent logic (Issue #9)
     # For now, return a stubbed response
 
@@ -186,6 +201,16 @@ async def chat_endpoint(
 
     # Stubbed response for MVP Week 1
     stub_reply = f"I received your message: '{last_user_message}'. This is a stubbed response - actual agent integration coming in Issue #9."
+
+    # Log response generation (will be more detailed with actual agent)
+    logger.info(
+        "Chat response generated",
+        request_id=request_id,
+        response_length=len(stub_reply),
+        cache_hit=False,
+        tokens_input=0,
+        tokens_output=0,
+    )
 
     # TODO: Implement these features in subsequent issues:
     # - MCP router integration (Issue #8)
