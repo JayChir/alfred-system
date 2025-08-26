@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from src.config import Settings, get_settings
+
 # Create router for chat endpoints
 router = APIRouter()
 
@@ -119,20 +121,15 @@ class ChatResponse(BaseModel):
 # Dependency for API key authentication
 async def verify_api_key(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    settings: Settings = Depends(get_settings),  # noqa: B008
 ) -> str:
     """
     Verify API key from request header.
 
     This is a simple implementation for Week 1.
-    TODO: Implement proper auth in production (Week 4).
+    TODO: Implement proper auth with JWT in production (Week 4).
     """
-    # For MVP, we'll check against env var
-    # TODO: Load from config properly (Issue #6)
-    import os
-
-    expected_key = os.getenv("API_KEY", "dev-api-key-change-for-production")
-
-    if not x_api_key or x_api_key != expected_key:
+    if not x_api_key or x_api_key != settings.api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",

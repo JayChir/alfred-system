@@ -2,24 +2,104 @@
 FastAPI application entry point for Alfred Agent Core.
 
 This module initializes the FastAPI app with routers, middleware,
-error handlers, and OpenAPI configuration.
+error handlers, and OpenAPI configuration. All configuration is loaded
+from environment variables via the config module.
 """
 
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.config import Settings, get_settings
 from src.routers import chat, health
 
-# Application version - update this for releases
-APP_VERSION = "0.1.0"
+# Configure structured logging
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.dev.ConsoleRenderer(),
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+def validate_configuration() -> Settings:
+    """
+    Load and validate application configuration.
+
+    This function will exit the application if configuration is invalid,
+    providing clear error messages about what's missing or incorrect.
+
+    Returns:
+        Settings: Validated configuration object
+    """
+    try:
+        settings = get_settings()
+        logger.info(
+            "Configuration validated successfully",
+            app_env=settings.app_env,
+            app_version=settings.app_version,
+            log_level=settings.log_level,
+        )
+        return settings
+    except ValidationError as e:
+        logger.error("Configuration validation failed")
+        print("\n" + "=" * 60)
+        print("CONFIGURATION ERROR - Application cannot start")
+        print("=" * 60)
+
+        for error in e.errors():
+            field = ".".join(str(x) for x in error["loc"])
+            msg = error["msg"]
+            print(f"\n❌ {field}: {msg}")
+
+            # Provide helpful hints for common issues
+            if "api_key" in field.lower():
+                print("   → Set API_KEY environment variable (min 32 chars)")
+                print(
+                    '   → Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+                )
+            elif "anthropic" in field.lower():
+                print("   → Set ANTHROPIC_API_KEY environment variable")
+                print("   → Get from: https://console.anthropic.com/account/keys")
+            elif "database_url" in field.lower():
+                print("   → Format: postgresql://user:password@host:port/database")
+
+        print("\n" + "=" * 60)
+        print("Fix the above errors in your .env file or environment variables")
+        print("See .env.example for a complete template")
+        print("=" * 60 + "\n")
+
+        sys.exit(1)
+    except Exception as e:
+        logger.error("Unexpected error during configuration", error=str(e))
+        print(f"\n❌ Unexpected configuration error: {e}")
+        sys.exit(1)
+
+
+# Load and validate configuration before creating app
+settings = validate_configuration()
 
 
 @asynccontextmanager
@@ -28,25 +108,42 @@ async def lifespan(app: FastAPI):
     Application lifespan manager for startup and shutdown tasks.
 
     Handles:
+    - Configuration validation and logging
     - Resource initialization on startup
     - Cleanup on shutdown
     """
     # Startup tasks
-    print(f"Starting Alfred Agent Core v{APP_VERSION}...")
+    logger.info(
+        f"Starting {settings.app_name}",
+        version=settings.app_version,
+        environment=settings.app_env,
+    )
+
+    # Log non-sensitive configuration
+    settings.log_config()
+
+    # Validate production requirements if applicable
+    try:
+        settings.validate_required_for_production()
+    except ValueError as e:
+        if settings.app_env == "production":
+            logger.error("Production validation failed", error=str(e))
+            sys.exit(1)
+
     # TODO: Initialize MCP connections, cache, etc. in future issues
 
     yield
 
     # Shutdown tasks
-    print("Shutting down Alfred Agent Core...")
+    logger.info(f"Shutting down {settings.app_name}...")
     # TODO: Close connections, flush cache, etc.
 
 
-# Initialize FastAPI application
+# Initialize FastAPI application with settings
 app = FastAPI(
-    title="Alfred Agent Core",
+    title=settings.app_name,
     description="FastAPI-based AI agent with MCP routing, OAuth, and caching",
-    version=APP_VERSION,
+    version=settings.app_version,
     lifespan=lifespan,
     docs_url="/docs",  # OpenAPI UI
     redoc_url="/redoc",  # Alternative docs UI
@@ -77,13 +174,12 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
-# CORS configuration for development
-# TODO: Restrict origins in production (Week 4)
+# CORS configuration from environment settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in dev
+    allow_origins=settings.cors_origins,  # Loaded from environment
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -187,7 +283,7 @@ async def root() -> Dict[str, Any]:
     """Root endpoint providing basic service information."""
     return {
         "service": "Alfred Agent Core",
-        "version": APP_VERSION,
+        "version": settings.app_version,
         "docs": "/docs",
         "health": "/healthz",
     }
