@@ -96,7 +96,6 @@ def filter_sensitive_data(
     """
     sensitive_keys = [
         "password",
-        "token",
         "api_key",
         "secret",
         "authorization",
@@ -104,6 +103,8 @@ def filter_sensitive_data(
         "refresh_token",
         "fernet_key",
         "jwt_secret",
+        # Note: Removed generic "token" to allow token usage metrics
+        # Only specific auth tokens are now redacted
     ]
 
     for key in list(event_dict.keys()):

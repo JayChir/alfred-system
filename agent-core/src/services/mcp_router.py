@@ -120,15 +120,29 @@ class MCPRouter:
         # Context manager for server lifecycles
         self.exit_stack: Optional[AsyncExitStack] = None
 
-        # Shared HTTP client with custom timeouts and settings
-        self.http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.http_timeout),
-            follow_redirects=True,
-            # Add any custom headers, proxies, or TLS config here
-        )
-
         # Initialize server configurations from environment
         self.server_configs = self._load_server_configs()
+
+    def _create_http_client(self) -> httpx.AsyncClient:
+        """
+        Create HTTP client with enterprise-friendly settings.
+
+        Each MCP server gets its own client instance to avoid lifecycle conflicts
+        while maintaining our custom timeout and proxy/header support.
+
+        Returns:
+            Configured httpx.AsyncClient with custom settings
+        """
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                self.http_timeout
+            ),  # 100 seconds for long MCP operations
+            follow_redirects=True,  # Handle redirects automatically
+            # Add enterprise-friendly settings:
+            # headers={"User-Agent": f"Alfred-Agent-Core/{self.settings.app_version}"},
+            # proxies=self.settings.http_proxy if hasattr(self.settings, 'http_proxy') else None,
+            # verify=True,  # TLS certificate verification
+        )
 
     def _load_server_configs(self) -> List[MCPServerConfig]:
         """
@@ -200,18 +214,20 @@ class MCPRouter:
             try:
                 # Create appropriate server instance based on transport
                 if config.transport == "streamable_http":
-                    # Streamable HTTP endpoint is at /mcp
+                    # Streamable HTTP endpoint - config.url already includes /mcp path
+                    # Create custom HTTP client with enterprise settings for each server
                     server = MCPServerStreamableHTTP(
-                        url=f"{config.url}/mcp",
+                        url=config.url,  # Don't add /mcp - already in config.url
                         tool_prefix=config.tool_prefix,
-                        http_client=self.http_client,  # Use shared HTTP client
+                        http_client=self._create_http_client(),  # Custom client with 100s timeout
                     )
                 else:
-                    # SSE endpoint is at /sse
+                    # SSE endpoint - replace /mcp with /sse in the URL
+                    sse_url = config.url.replace("/mcp", "/sse")
                     server = MCPServerSSE(
-                        url=f"{config.url}/sse",
+                        url=sse_url,
                         tool_prefix=config.tool_prefix,
-                        http_client=self.http_client,
+                        http_client=self._create_http_client(),  # Custom client with 100s timeout
                     )
 
                 # Store server instance
@@ -231,6 +247,7 @@ class MCPRouter:
                 logger.info(
                     "Successfully connected to MCP server",
                     server=config.name,
+                    url=config.url,
                     transport=config.transport,
                 )
 
@@ -238,12 +255,19 @@ class MCPRouter:
                 logger.error(
                     "Failed to connect to MCP server",
                     server=config.name,
+                    url=config.url,
+                    transport=config.transport,
                     error=str(e),
+                    error_type=type(e).__name__,
+                    # Include more context for debugging
+                    timeout_seconds=self.http_timeout,
+                    exc_info=True,  # Include full stack trace
                 )
                 self.health_status[config.name] = MCPServerStatus(
                     server_name=config.name,
                     status="unhealthy",
-                    error_message=str(e),
+                    error_message=f"{type(e).__name__}: {str(e)}",
+                    consecutive_failures=1,
                 )
 
         # Perform initial tool discovery
@@ -676,8 +700,7 @@ class MCPRouter:
         if self.exit_stack:
             await self.exit_stack.aclose()
 
-        # Close HTTP client
-        await self.http_client.aclose()
+        # Note: No shared HTTP client to close - each server manages its own
 
         # Clear registries
         self.servers.clear()

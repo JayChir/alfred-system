@@ -122,7 +122,8 @@ class AgentOrchestrator:
 
         self.agent = Agent(
             model=anthropic_model,
-            toolsets=toolsets,  # MCP servers implement Toolset interface
+            # Don't set toolsets here - we'll pass them dynamically at run time
+            # to allow for live health checks and filtering
             system_prompt=self._build_system_prompt(),
         )
 
