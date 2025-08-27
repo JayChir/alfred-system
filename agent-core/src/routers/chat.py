@@ -195,6 +195,9 @@ async def chat_endpoint(
         stream=stream,
     )
 
+    # Initialize orchestrator to None for error handling
+    orchestrator = None
+
     try:
         # Get the agent orchestrator
         orchestrator = await get_agent_orchestrator()
@@ -289,8 +292,8 @@ async def chat_endpoint(
             error_type=type(e).__name__,
         )
 
-        # Normalize error using orchestrator's error taxonomy
-        if hasattr(orchestrator, "_normalize_error"):
+        # Normalize error using orchestrator's error taxonomy if available
+        if orchestrator and hasattr(orchestrator, "_normalize_error"):
             error_detail = orchestrator._normalize_error(e)
         else:
             error_detail = {"error": "APP_UNEXPECTED", "message": str(e)}
@@ -332,6 +335,9 @@ async def chat_stream_endpoint(
     Returns:
         StreamingResponse with SSE events
     """
+    # Initialize orchestrator to None for error handling
+    orchestrator = None
+
     try:
         # Get the agent orchestrator
         orchestrator = await get_agent_orchestrator()
