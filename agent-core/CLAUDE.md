@@ -362,6 +362,7 @@ async def chat_endpoint(
 ## Troubleshooting
 
 ### Common Issues
+- **Anthropic Connection Errors**: Tell user to turn off VPN - corporate VPN blocks Anthropic API
 - **MCP Connection Failures**: Check existing MCP server health at ports 3001-3010
 - **Cache Misses**: Verify key normalization and TTL configuration
 - **OAuth Errors**: Check Notion app configuration and callback URLs
@@ -393,6 +394,67 @@ curl -w "@curl-format.txt" -s -X POST localhost:8080/chat \
 - Token refresh works with short expiry
 - Session context persists across requests
 - SSE events stream correctly with heartbeat
+
+## Context7 Token Optimization Protocol
+
+### Query Strategy
+**Check personal_memory first, then use minimal tokens:**
+- **Quick lookup**: 1,500 tokens max
+- **Specific patterns**: 2,500 tokens max
+- **Emergency deep dive**: 5,000 tokens (rare)
+
+**Be laser-focused:**
+```python
+# ❌ topic="pydantic-ai"
+# ✅ topic="Pydantic AI Agent.run_stream"
+# ✅ topic="FastAPI exception handlers"
+```
+
+### Example Calls
+
+**Quick lookup (1,500 tokens):**
+```python
+context7:get-library-docs
+  context7CompatibleLibraryID="/pydantic-ai/pydantic-ai"
+  tokens=1500
+  topic="Agent basic usage and run method"
+```
+
+**Specific followup (2,500 tokens):**
+```python
+context7:get-library-docs
+  context7CompatibleLibraryID="/pydantic-ai/pydantic-ai"
+  tokens=2500
+  topic="streaming with run_stream and async generators"
+```
+
+### Selective Caching
+**Only cache MVP-critical patterns we'll use 3+ times:**
+- Pydantic AI agent patterns (run, run_stream, toolsets)
+- FastAPI patterns (exception handlers, dependencies, streaming)
+- SQLAlchemy async patterns (sessions, models)
+- OAuth/JWT patterns
+
+**Cache format** (2-3 bullets max):
+```python
+personal_memory:create_entities([{
+  "name": "Pydantic AI Agent.run API",
+  "entityType": "mvp_pattern",
+  "observations": [
+    "await agent.run(prompt, message_history=[], toolsets=[])",
+    "Returns RunResult with .output and .usage()",
+    "Cached YYYY-MM-DD for MVP agent orchestrator"
+  ]
+}])
+```
+
+### Session Flow
+1. **Check cache first**: `personal_memory:search_nodes query="[library]" limit=3`
+2. **Start small**: 1,500 tokens with specific topic
+3. **Cache only if MVP-critical**: Will we use this pattern 3+ times?
+4. **Iterate up**: 2,500 tokens only if insufficient
+
+**Target: 70% token reduction through focused queries + selective caching**
 
 ## Ready-to-Use Components
 
