@@ -126,13 +126,63 @@ async def lifespan(app: FastAPI):
             logger.error("Production validation failed", error=str(e))
             sys.exit(1)
 
-    # TODO: Initialize MCP connections, cache, etc. in future issues
+    # Initialize MCP router and agent orchestrator during startup
+    # This ensures MCP connections are established before handling requests
+    mcp_router = None
+    orchestrator = None
+
+    try:
+        # Initialize MCP router first
+        from src.services.mcp_router import get_mcp_router
+
+        mcp_router = await get_mcp_router()
+
+        # Count healthy servers for logging
+        healthy_servers = [
+            name
+            for name, status in mcp_router.health_status.items()
+            if status.status == "healthy"
+        ]
+
+        logger.info(
+            "MCP router initialized successfully",
+            total_servers=len(mcp_router.health_status),
+            healthy_servers=len(healthy_servers),
+            healthy_server_names=healthy_servers,
+        )
+
+        # Initialize agent orchestrator with the MCP router
+        from src.services.agent_orchestrator import get_agent_orchestrator
+
+        orchestrator = await get_agent_orchestrator()
+        logger.info("Agent orchestrator initialized with MCP toolsets")
+
+    except Exception as e:
+        logger.error(
+            "Failed to initialize MCP services during startup",
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        # Continue startup even if MCP fails - agent will work without tools
+        logger.warning("Application starting without MCP tools")
 
     yield
 
     # Shutdown tasks
     logger.info("Application shutting down", app_name=settings.app_name)
-    # TODO: Close connections, flush cache, etc.
+
+    # Clean shutdown of MCP connections
+    try:
+        if orchestrator:
+            await orchestrator.shutdown()
+            logger.info("Agent orchestrator shutdown complete")
+
+        if mcp_router:
+            await mcp_router.shutdown()
+            logger.info("MCP router shutdown complete")
+
+    except Exception as e:
+        logger.error("Error during shutdown", error=str(e))
 
 
 # Initialize FastAPI application with settings
