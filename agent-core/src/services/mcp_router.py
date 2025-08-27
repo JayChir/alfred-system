@@ -91,7 +91,7 @@ class MCPRouter:
         self,
         settings: Optional[Settings] = None,
         cache_ttl_minutes: int = 10,
-        http_timeout_seconds: float = 30.0,
+        http_timeout_seconds: float = 100.0,
     ):
         """
         Initialize the MCP Router.
@@ -140,18 +140,18 @@ class MCPRouter:
         configs = []
 
         # Map of server names to their production URLs
-        # Based on MCP_PROXY_IMPLEMENTATION.md
+        # Based on MCP_PROXY_IMPLEMENTATION.md - all endpoints use /mcp path
         server_mapping = {
-            "time": "https://mcp-time.artemsys.ai",
-            "github-personal": "https://mcp-github-personal.artemsys.ai",
-            "github-work": "https://mcp-github-work.artemsys.ai",
-            "notion": "https://mcp-notion.artemsys.ai",
-            "fetch": "https://mcp-fetch.artemsys.ai",
-            "sequential-thinking": "https://mcp-sequential.artemsys.ai",
-            "filesystem": "https://mcp-filesystem.artemsys.ai",
-            "playwright": "https://mcp-playwright.artemsys.ai",
-            "memory": "https://mcp-memory.artemsys.ai",
-            "atlassian": "https://mcp-atlassian.artemsys.ai",
+            "time": "https://mcp-time.artemsys.ai/mcp",
+            "github-personal": "https://mcp-github-personal.artemsys.ai/mcp",
+            "github-work": "https://mcp-github-work.artemsys.ai/mcp",
+            "notion": "https://mcp-notion.artemsys.ai/mcp",
+            "fetch": "https://mcp-fetch.artemsys.ai/mcp",
+            "sequential-thinking": "https://mcp-sequential.artemsys.ai/mcp",
+            "filesystem": "https://mcp-filesystem.artemsys.ai/mcp",
+            "playwright": "https://mcp-playwright.artemsys.ai/mcp",
+            "memory": "https://mcp-memory.artemsys.ai/mcp",
+            "atlassian": "https://mcp-atlassian.artemsys.ai/mcp",
         }
 
         # For MVP Week 1, start with a subset
