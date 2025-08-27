@@ -8,7 +8,6 @@ non-streaming responses.
 
 import time
 import uuid
-from datetime import timedelta
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -112,12 +111,19 @@ class AgentOrchestrator:
 
         # Create agent with Anthropic model and MCP toolsets
         # Note: Using toolsets= parameter, not tools=
+        # Create explicit AnthropicModel with API key to avoid environment variable issues
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        anthropic_model = AnthropicModel(
+            self.settings.anthropic_model,
+            provider=AnthropicProvider(api_key=self.settings.anthropic_api_key),
+        )
+
         self.agent = Agent(
-            model=f"anthropic:{self.settings.anthropic_model}",
+            model=anthropic_model,
             toolsets=toolsets,  # MCP servers implement Toolset interface
             system_prompt=self._build_system_prompt(),
-            # Optional: Set default retry behavior
-            max_retries=2,
         )
 
         logger.info(
@@ -204,10 +210,10 @@ class AgentOrchestrator:
             # Re-filter toolsets for this specific request (live health check)
             current_toolsets = self._get_healthy_toolsets()
 
-            # Apply safety limits
+            # Apply safety limits - Pydantic AI UsageLimits only supports request_limit and response_tokens_limit
             usage_limits = UsageLimits(
-                request_count=max_tool_calls,
-                request_timeout=timedelta(seconds=timeout_seconds),
+                request_limit=max_tool_calls,
+                # Note: timeout_seconds parameter handled at agent level, not in UsageLimits
             )
 
             # Process based on streaming preference
@@ -306,14 +312,14 @@ class AgentOrchestrator:
             return response
 
         except Exception as e:
-            # Log and re-raise with normalized error
+            # Log and re-raise original exception - normalization handled at router level
             logger.error(
                 "Chat request failed",
                 request_id=request_id,
                 error=str(e),
                 error_type=type(e).__name__,
             )
-            raise self._normalize_error(e) from e
+            raise e
 
     async def _stream_chat(
         self,
@@ -427,6 +433,15 @@ class AgentOrchestrator:
             return {
                 "error": "MODEL_PROVIDER_ERROR",
                 "message": "Model behavior validation failed",
+                "details": error_str,
+                "origin": "anthropic",
+            }
+
+        # Check for Anthropic API connection errors
+        if "APIConnectionError" in error_type or "Connection error" in error_str:
+            return {
+                "error": "MODEL_PROVIDER_ERROR",
+                "message": "Failed to connect to Anthropic API",
                 "details": error_str,
                 "origin": "anthropic",
             }
