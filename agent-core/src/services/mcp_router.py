@@ -306,9 +306,11 @@ class MCPRouter:
                 tool_def = ToolDef(
                     server=server_name,
                     name=tool.name,  # Already prefixed by Pydantic MCP if configured
-                    original_name=tool.name.removeprefix(f"{server_name}_")
-                    if tool.name.startswith(f"{server_name}_")
-                    else tool.name,
+                    original_name=(
+                        tool.name.removeprefix(f"{server_name}_")
+                        if tool.name.startswith(f"{server_name}_")
+                        else tool.name
+                    ),
                     description=getattr(tool, "description", None),
                     input_schema=getattr(tool, "parameters_json_schema", None),
                     output_schema=None,  # MCP tools don't typically have output schemas
@@ -614,9 +616,11 @@ class MCPRouter:
             "servers": {
                 name: {
                     "status": status.status,
-                    "last_success": status.last_success_time.isoformat()
-                    if status.last_success_time
-                    else None,
+                    "last_success": (
+                        status.last_success_time.isoformat()
+                        if status.last_success_time
+                        else None
+                    ),
                     "latency_ms": status.ping_latency_ms,
                     "error": status.error_message,
                 }
