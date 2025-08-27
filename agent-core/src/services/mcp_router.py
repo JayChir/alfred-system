@@ -91,7 +91,7 @@ class MCPRouter:
         self,
         settings: Optional[Settings] = None,
         cache_ttl_minutes: int = 10,
-        http_timeout_seconds: float = 30.0,
+        http_timeout_seconds: float = 100.0,
     ):
         """
         Initialize the MCP Router.
