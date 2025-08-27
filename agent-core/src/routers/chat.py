@@ -5,12 +5,15 @@ Provides /chat endpoint for synchronous chat requests (Week 1)
 and /chat/stream for SSE streaming (Week 4).
 """
 
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.config import Settings, get_settings
+from src.services.agent_orchestrator import get_agent_orchestrator
 from src.utils.logging import get_logger
 
 # Create router for chat endpoints
@@ -156,23 +159,25 @@ async def chat_endpoint(
     request: Request,
     chat_request: ChatRequest,
     api_key: str = Depends(verify_api_key),
-) -> ChatResponse:
+    stream: bool = False,  # Query parameter to enable streaming
+) -> Any:
     """
     Main chat endpoint for AI agent interaction.
 
     This endpoint:
     - Accepts conversation messages
-    - Routes to appropriate MCP tools (Week 1, Issue #8)
-    - Checks cache for repeated queries (Week 1, Issue #10)
+    - Routes to appropriate MCP tools via Agent Orchestrator
+    - Supports both streaming and non-streaming responses
     - Returns structured response with metadata
 
     Args:
         request: FastAPI request object (contains request_id)
         chat_request: Validated chat request with messages
         api_key: Verified API key from header
+        stream: Enable streaming response (returns SSE stream)
 
     Returns:
-        ChatResponse with agent reply and metadata
+        ChatResponse for non-streaming, StreamingResponse for streaming
 
     Raises:
         HTTPException: For various error conditions
@@ -187,81 +192,184 @@ async def chat_endpoint(
         message_count=len(chat_request.messages),
         has_session=bool(chat_request.session),
         force_refresh=chat_request.forceRefresh,
+        stream=stream,
     )
 
-    # TODO: Implement actual agent logic (Issue #9)
-    # For now, return a stubbed response
+    try:
+        # Get the agent orchestrator
+        orchestrator = await get_agent_orchestrator()
 
-    # Extract the last user message for stub response
-    last_user_message = None
-    for msg in reversed(chat_request.messages):
-        if msg.role == "user":
-            last_user_message = msg.content
-            break
+        # Convert messages to simple prompt (for MVP - later will pass full history)
+        # Extract the last user message as the prompt
+        prompt = None
+        for msg in reversed(chat_request.messages):
+            if msg.role == "user":
+                prompt = msg.content
+                break
 
-    # Stubbed response for MVP Week 1
-    stub_reply = f"I received your message: '{last_user_message}'. This is a stubbed response - actual agent integration coming in Issue #9."
+        if not prompt:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No user message found in request",
+            )
 
-    # Log response generation (will be more detailed with actual agent)
-    logger.info(
-        "Chat response generated",
-        request_id=request_id,
-        response_length=len(stub_reply),
-        cache_hit=False,
-        tokens_input=0,
-        tokens_output=0,
-    )
+        # Process through agent orchestrator
+        if stream:
+            # Streaming response
+            async def event_generator():
+                """Generate Server-Sent Events for streaming."""
+                try:
+                    async for event in orchestrator.chat(
+                        prompt=prompt,
+                        session_id=chat_request.session,
+                        stream=True,
+                        force_refresh=chat_request.forceRefresh,
+                    ):
+                        # Format as SSE
+                        yield f"data: {json.dumps(event.dict())}\n\n"
+                except Exception as e:
+                    error_event = {
+                        "type": "error",
+                        "data": str(e),
+                        "request_id": request_id,
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n"
 
-    # TODO: Implement these features in subsequent issues:
-    # - MCP router integration (Issue #8)
-    # - Pydantic AI agent orchestration (Issue #9)
-    # - Cache checking and storage (Issue #10)
-    # - Session management (Week 3, Issue #23)
-    # - Token counting (Week 3, Issue #26)
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Request-ID": request_id,
+                },
+            )
 
-    return ChatResponse(
-        reply=stub_reply,
-        meta=ResponseMeta(
-            cacheHit=False,  # Always false for stub
-            cacheTtlRemaining=None,
-            tokens=TokenUsage(input=0, output=0),  # Will implement counting later
-            requestId=request_id,
-        ),
-    )
+        else:
+            # Non-streaming response
+            result = await orchestrator.chat(
+                prompt=prompt,
+                session_id=chat_request.session,
+                stream=False,
+                force_refresh=chat_request.forceRefresh,
+            )
+
+            # Log response generation
+            logger.info(
+                "Chat response generated",
+                request_id=request_id,
+                response_length=len(result.reply),
+                tool_count=len(result.meta.get("tool_calls", [])),
+                tokens_input=result.meta.get("usage", {}).get("input_tokens", 0),
+                tokens_output=result.meta.get("usage", {}).get("output_tokens", 0),
+            )
+
+            # Format response according to API contract
+            return ChatResponse(
+                reply=result.reply,
+                meta=ResponseMeta(
+                    cacheHit=False,  # TODO: Implement caching in Issue #10
+                    cacheTtlRemaining=None,
+                    tokens=TokenUsage(
+                        input=result.meta.get("usage", {}).get("input_tokens", 0),
+                        output=result.meta.get("usage", {}).get("output_tokens", 0),
+                    ),
+                    requestId=request_id,
+                ),
+            )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Log and convert other exceptions
+        logger.error(
+            "Chat endpoint error",
+            request_id=request_id,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+
+        # Normalize error using orchestrator's error taxonomy
+        if hasattr(orchestrator, "_normalize_error"):
+            error_detail = orchestrator._normalize_error(e)
+        else:
+            error_detail = {"error": "APP_UNEXPECTED", "message": str(e)}
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail,
+        ) from e
 
 
 @router.get(
     "/chat/stream",
     summary="Stream chat responses via SSE",
-    description="Server-sent events endpoint for streaming responses (Week 4)",
+    description="Server-sent events endpoint for streaming responses",
     response_description="SSE stream of chat events",
-    status_code=status.HTTP_501_NOT_IMPLEMENTED,
 )
 async def chat_stream_endpoint(
+    prompt: str,
     session: Optional[str] = None,
     api_key: str = Depends(verify_api_key),
-) -> Dict[str, Any]:
+) -> StreamingResponse:
     """
     SSE streaming endpoint for real-time chat responses.
 
-    This will be implemented in Week 4 (Issue #29).
+    This provides an alternative GET endpoint for streaming.
+    The POST /chat endpoint with stream=true is preferred.
 
     Event types:
-    - token: Streaming text tokens
+    - text: Streaming text chunks
     - tool_call: MCP tool invocation
-    - tool_result: Tool execution result
-    - warning: Context limits or other warnings
-    - done: Stream completion with final metadata
+    - error: Error event
+    - final: Stream completion with final metadata
 
     Args:
+        prompt: User's message/prompt
         session: Optional session token
         api_key: Verified API key
 
     Returns:
-        Currently returns 501 Not Implemented
+        StreamingResponse with SSE events
     """
-    # TODO: Implement in Week 4 (Issue #29)
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="SSE streaming will be implemented in Week 4",
-    )
+    try:
+        # Get the agent orchestrator
+        orchestrator = await get_agent_orchestrator()
+
+        # Create async generator for SSE
+        async def event_generator():
+            """Generate Server-Sent Events for streaming."""
+            try:
+                async for event in orchestrator.chat(
+                    prompt=prompt,
+                    session_id=session,
+                    stream=True,
+                ):
+                    # Format as SSE
+                    yield f"data: {json.dumps(event.dict())}\n\n"
+            except Exception as e:
+                error_event = {
+                    "type": "error",
+                    "data": str(e),
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
+    except Exception as e:
+        logger.error(
+            "Stream endpoint error",
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "STREAM_INIT_FAILED", "message": str(e)},
+        ) from e
