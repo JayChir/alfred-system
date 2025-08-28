@@ -316,7 +316,7 @@ class TestIntegrationFlows:
             if response.status_code == 200:
                 # Should return JSON
                 assert "application/json" in response.headers.get("content-type", "")
-                data = response.json()  # Should parse successfully
+                response.json()  # Should parse successfully
 
     @pytest.mark.asyncio
     async def test_large_request_handling_integration(self, async_client):

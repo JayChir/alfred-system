@@ -1,0 +1,19 @@
+---
+description: Alfred System – goals, metrics, constraints
+alwaysApply: true
+---
+
+# Mission
+Cloud-native MCP assistant that cuts token cost ~80%, responds <3s P95, and works everywhere (desktop, web, mobile).
+
+# Primary Goals & Targets
+- Token efficiency: <100k tokens/session (≈80% reduction).
+- Latency: <3s P95; sub-second on cached reads; ~90% cache hit for Notion content.
+- Cost: total <$40–100/mo; per-session <$2. Favor performance first, optimize later.
+- Reliability: 99.5% uptime; zero context loss incidents.
+
+# Non-goals (MVP)
+No native mobile app; single-user initially; manual model switching; PG only (no Neo4j).
+
+# User/UX Priorities
+Mobile capture (95% success), ADHD-friendly escalation, cross-device continuity.

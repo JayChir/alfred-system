@@ -1,0 +1,8 @@
+---
+description: Diff standard
+alwaysApply: true
+---
+
+- Propose small, atomic diffs in ```diff fences.
+- If DB touched: include migration + rollback.
+- Post-change: how to run, validate, revert, and expected impact on latency/tokens/cache-hit.

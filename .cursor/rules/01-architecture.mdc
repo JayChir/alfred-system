@@ -1,0 +1,17 @@
+---
+description: Architecture snapshot and components
+alwaysApply: true
+---
+
+# Stack
+FastAPI + Pydantic AI + PostgreSQL cache + MCP (Streamable HTTP), Docker on DigitalOcean, Nginx reverse proxy.
+
+# Core Components
+- **MCP Router:** remote MCPs + hosted Notion MCP per user.
+- **OAuth Manager:** backend-only Notion auth; tokens encrypted at rest; proactive refresh.
+- **Cache Service:** read-through; thin in-memory → PG with TTL policies.
+- **Sessions:** per-user context and workspace binding.
+- **Streamable HTTP MCP routing via Nginx.**
+
+# Caching Tiers (concept)
+PG cache (4–24h TTL), smart staging to batch writes, Notion as source of truth.

@@ -1,0 +1,8 @@
+---
+description: Minimum hardening & ops
+alwaysApply: true
+---
+
+- Timeouts, retries (idempotent only), rate limits, security headers; secrets redacted.
+- Nginx routes for Streamable HTTP MCP; buffering off; HTTP/1.1 keep-alive; SSL on.
+- Docker-first deploy on DO; single droplet; backups; Notion as canonical data.

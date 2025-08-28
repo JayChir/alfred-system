@@ -1,0 +1,8 @@
+---
+description: Notion OAuth patterns & ACs
+alwaysApply: true
+---
+
+- Backend-owned Authorization Code flow; per-user token stored encrypted; proactive refresh.
+- Endpoints: `/connect/notion`, `/oauth/notion/callback`; `notion_connections` table; Fernet encryption.
+- Hosted Notion MCP (`mcp.notion.com/mcp`) per user; tool availability depends on connection status.
