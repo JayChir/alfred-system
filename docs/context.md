@@ -35,10 +35,10 @@ It captures tasks/notes anywhere, understands your personal/work context, and ac
 ## 4) Architecture (high level)
 
 - **Host/Infra:** DigitalOcean droplet (Docker), **FastAPI** app server, **PostgreSQL** DB, **FastMCP** stack.
-- **Core:** Pydantic-AI orchestrator, **MCP Router** to remote/hosted MCPs, **Session Store**, **Cache Service**.
-- **MCPs:**
-  - **Hosted Notion MCP** (OAuth per user)
-  - Existing remote MCPs (GitHub, Memory, Gmail/Calendar, Time, Web, etc.)
+- **Core:** Pydantic-AI orchestrator, **MCP Router** with client connections to hosted/remote services, **Session Store**, **Cache Service**.
+- **MCP Architecture:**
+  - **MCP Client** connecting to Notion's hosted MCP server (https://mcp.notion.com/mcp) with OAuth tokens
+  - Existing remote MCP servers (GitHub, Memory, Gmail/Calendar, Time, Web, etc.)
 - **Interfaces:** Claude Desktop (MCP), Web PWA (SSE streaming), Mobile PWA (voice/offline), Terminal/SSH CLI.
 - **Transport:** Streamable HTTP MCP for servers; **SSE** for client streaming responses.
 
@@ -53,7 +53,7 @@ flowchart LR
     OAuth[OAuth Manager] --> DB[(PostgreSQL)]
     Cache --> DB
     Sessions --> DB
-    Router --> HostedNotion[(Hosted Notion MCP - per user)]
+    Router --> NotionClient[MCP Client → notion.com/mcp]
     Router --> RemoteMCPs[(Remote MCPs: GitHub/Memory/Gmail/...)]
   end
 ```
@@ -110,7 +110,7 @@ Response metadata must include `cacheHit` and `cacheTtlRemaining`.
 
 ### Week 2 — Notion OAuth + Hosted Notion MCP
 - `/connect/notion` redirect + `/oauth/notion/callback` exchange; encrypted token storage; proactive refresh.
-- Per-user hosted Notion MCP sessions; feature flag fallback to self-host if needed.
+- Per-user MCP client connections to Notion's hosted service; feature flag fallback to self-host if needed.
 - Minimal consent page.
 
 ### Week 3 — Sessions + PostgreSQL Cache + Token Metering
@@ -249,7 +249,7 @@ FEATURE_NOTION_SELF_HOST_FALLBACK=false
 1. User clicks "Connect Notion" → `/connect/notion`
 2. Redirect to Notion → callback receives `code`
 3. Backend exchanges code → stores encrypted tokens + `expires_at`
-4. Hosted Notion MCP is available for that user; refresh eager at T-5m
+4. MCP client connection to Notion's hosted service is available for that user; refresh eager at T-5m
 
 ### B) Chat with Cache
 1. `/chat` request arrives with user/session
@@ -302,7 +302,7 @@ alfred-system/
 ## 17) Contact & Ownership
 
 - **Agent Core:** FastAPI app, MCP router, cache/session, OAuth manager.
-- **MCPs:** Hosted Notion (per-user), Remote MCPs (GitHub, Memory, etc.).
+- **MCPs:** MCP Client to Notion's hosted service (per-user tokens), Remote MCPs (GitHub, Memory, etc.).
 - **PWA/Mobile:** Web streaming, voice capture, offline queue.
 - **SRE/Ops:** Logs/metrics/alerts; DB backups; cost monitoring.
 
