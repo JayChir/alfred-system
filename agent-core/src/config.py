@@ -8,7 +8,7 @@ and .env files. All settings are validated at startup to fail fast with clear er
 
 import json
 import secrets
-from typing import Annotated, Any, List, Optional
+from typing import Annotated, Any, ClassVar, Dict, List, Optional, Tuple
 
 import structlog
 from pydantic import (
@@ -191,6 +191,29 @@ class Settings(BaseSettings):
         description="GitHub-specific cache TTL in seconds (15 minutes)",
         ge=0,
     )
+
+    # ===== Cacheable Tools Configuration =====
+    # Define which MCP tools are safe to cache (idempotent reads only)
+    # Format: {("server", "tool"): ttl_seconds}
+    # This is defined as a class attribute, not an instance field
+    CACHEABLE_TOOLS: ClassVar[Dict[Tuple[str, str], int]] = {
+        # Notion tools - longer TTL for stable content (using actual MCP tool names)
+        ("notion", "API-retrieve-a-page"): 900,  # 15 min - pages change slowly
+        ("notion", "API-post-search"): 300,  # 5 min - search results more dynamic
+        ("notion", "API-retrieve-a-database"): 900,  # 15 min - schema rarely changes
+        ("notion", "API-post-database-query"): 300,  # 5 min - query results dynamic
+        ("notion", "API-retrieve-a-comment"): 300,  # 5 min - comments can be added
+        # GitHub tools - moderate TTL for code content
+        ("github", "get_issue"): 600,  # 10 min - issue details
+        ("github", "search_repositories"): 300,  # 5 min - search results
+        ("github", "get_file_contents"): 1800,  # 30 min - code rarely changes
+        ("github", "list_issues"): 300,  # 5 min - issue list can change
+        ("github", "get_pull_request"): 600,  # 10 min - PR details
+        # Explicitly excluded (non-cacheable):
+        # - time.get_current_time (always needs to be fresh)
+        # - All mutation operations (create, update, delete)
+        # - OAuth operations (security sensitive)
+    }
 
     # ===== Rate Limiting (Week 4) =====
     rate_limit_requests: int = Field(

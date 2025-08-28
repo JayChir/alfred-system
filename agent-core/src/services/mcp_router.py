@@ -10,13 +10,18 @@ import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import logfire
 from pydantic_ai.mcp import MCPServerSSE, MCPServerStreamableHTTP
 
 from src.config import Settings, get_settings
+from src.services.cache_service import (
+    MemoryInvokeCache,
+    get_cache_service,
+    make_cache_key,
+)
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -123,6 +128,9 @@ class MCPRouter:
         # Initialize server configurations from environment
         self.server_configs = self._load_server_configs()
 
+        # Initialize cache service for tool invocation results
+        self.cache: MemoryInvokeCache = get_cache_service()
+
     def _create_http_client(self) -> httpx.AsyncClient:
         """
         Create HTTP client with enterprise-friendly settings.
@@ -212,6 +220,123 @@ class MCPRouter:
                 continue
 
             try:
+                # Create process_tool_call hook for cache interception
+                def make_process_tool_call(current_config):
+                    async def process_tool_call(
+                        ctx, call_tool, name: str, tool_args: Dict[str, Any]
+                    ):
+                        """
+                        Hook to intercept tool calls and add caching layer.
+
+                        Based on ProcessToolCallback signature from Pydantic AI:
+                        (RunContext, Callable, str, dict) -> Awaitable[result]
+
+                        Args:
+                            ctx: Pydantic AI run context with deps and logging
+                            call_tool: Callable that executes the actual MCP tool call
+                            name: Tool name (e.g., "time_get_current_time")
+                            tool_args: Arguments passed to the tool
+
+                        Returns:
+                            Tool result in the same format as call_tool() would return
+                        """
+                        logger.info(
+                            "Process tool call hook invoked",
+                            server=current_config.name,
+                            tool=name,
+                            args_keys=list(tool_args.keys()) if tool_args else [],
+                        )
+
+                        # Get user scope and cache mode from context deps
+                        # Default to global scope and prefer mode for MVP
+                        from types import SimpleNamespace
+
+                        deps = getattr(ctx, "deps", SimpleNamespace())
+                        user_scope = getattr(deps, "user_scope", "global")
+                        cache_mode = getattr(deps, "cache_mode", "prefer")
+
+                        # Check if tool is cacheable
+                        cache_key_tuple = (current_config.name, name)
+                        ttl = self.settings.CACHEABLE_TOOLS.get(cache_key_tuple)
+
+                        logger.info(
+                            "Cache lookup",
+                            server=current_config.name,
+                            tool=name,
+                            cache_key=cache_key_tuple,
+                            ttl=ttl,
+                            allowlist=list(self.settings.CACHEABLE_TOOLS.keys()),
+                        )
+
+                        if not ttl or cache_mode == "bypass":
+                            # Not cacheable or bypass mode - call directly
+                            logger.debug(
+                                "Tool not cacheable or bypass mode",
+                                server=current_config.name,
+                                tool=name,
+                                cacheable=bool(ttl),
+                                mode=cache_mode,
+                            )
+                            return await call_tool(name, tool_args)
+
+                        # Generate cache key
+                        from src.services.cache_service import make_cache_key
+
+                        key = make_cache_key(
+                            server=current_config.name,
+                            tool=name,
+                            args=tool_args,
+                            user_scope=user_scope,
+                        )
+
+                        # Check cache if not refreshing
+                        if cache_mode != "refresh":
+                            cached = await self.cache.get(key)
+                            if cached:
+                                logger.info(
+                                    "Cache hit",
+                                    server=current_config.name,
+                                    tool=name,
+                                    key_prefix=key[:32],
+                                    age_s=cached.get("_cache_age_s", 0),
+                                    ttl_remaining=cached.get(
+                                        "_cache_ttl_remaining_s", 0
+                                    ),
+                                )
+                                # Clean cache metadata before returning
+                                result = cached.copy()
+                                result.pop("_cached_at", None)
+                                result.pop("_cache_age_s", None)
+                                result.pop("_cache_ttl_remaining_s", None)
+                                return result
+
+                        # Cache miss or refresh - call the tool
+                        logger.debug(
+                            "Cache miss, calling tool",
+                            server=current_config.name,
+                            tool=name,
+                            mode=cache_mode,
+                        )
+
+                        result = await call_tool(
+                            name, tool_args
+                        )  # Use provided callback
+
+                        # Cache the result
+                        await self.cache.set(
+                            key,
+                            result if isinstance(result, dict) else {"result": result},
+                            ttl_s=ttl,
+                            labels=[current_config.name, name],
+                        )
+
+                        return result
+
+                    return process_tool_call
+
+                # Create the process_tool_call function for this config
+                process_tool_call_func = make_process_tool_call(config)
+
                 # Create appropriate server instance based on transport
                 if config.transport == "streamable_http":
                     # Streamable HTTP endpoint - config.url already includes /mcp path
@@ -220,6 +345,7 @@ class MCPRouter:
                         url=config.url,  # Don't add /mcp - already in config.url
                         tool_prefix=config.tool_prefix,
                         http_client=self._create_http_client(),  # Custom client with 100s timeout
+                        process_tool_call=process_tool_call_func,  # Add cache interception
                     )
                 else:
                     # SSE endpoint - replace /mcp with /sse in the URL
@@ -228,6 +354,7 @@ class MCPRouter:
                         url=sse_url,
                         tool_prefix=config.tool_prefix,
                         http_client=self._create_http_client(),  # Custom client with 100s timeout
+                        process_tool_call=process_tool_call_func,  # Add cache interception
                     )
 
                 # Store server instance
@@ -436,9 +563,115 @@ class MCPRouter:
         arguments: Dict[str, Any],
         *,
         metadata: Optional[Dict[str, Any]] = None,
+        cache_mode: str = "prefer",  # prefer|refresh|bypass
+        user_scope: str = "global",  # Will be user_id:workspace_id later
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """
+        Call a tool on a specific MCP server with caching support.
+
+        Args:
+            server_name: Name of the server
+            tool_name: Name of the tool (without prefix)
+            arguments: Tool arguments
+            metadata: Optional metadata for the call
+            cache_mode: Cache strategy - prefer (use cache), refresh (force update), bypass (skip cache)
+            user_scope: User/workspace isolation scope for cache keys
+
+        Returns:
+            Tuple of (result, cache_metadata) where cache_metadata includes hit/miss info
+        """
+        # Check if tool is cacheable based on allowlist
+        cache_key_tuple = (server_name, tool_name)
+        settings = self.settings
+        cacheable_tools = getattr(settings, "CACHEABLE_TOOLS", {})
+
+        if cache_key_tuple not in cacheable_tools:
+            # Tool not in allowlist - call directly without caching
+            logger.debug(
+                "Tool not cacheable (not in allowlist)",
+                server=server_name,
+                tool=tool_name,
+            )
+            result = await self._direct_call_tool(
+                server_name, tool_name, arguments, metadata=metadata
+            )
+            return result, {"cacheHit": False, "cacheable": False}
+
+        # Get TTL for this specific tool
+        ttl_s = cacheable_tools[cache_key_tuple]
+
+        # Generate cache key with proper scoping
+        cache_key = make_cache_key(
+            server=server_name,
+            tool=tool_name,
+            args=arguments,
+            user_scope=user_scope,
+            tool_version="v1",  # TODO: Get from tool schema later
+        )
+
+        # Handle cache modes
+        if cache_mode == "bypass":
+            # Skip cache entirely
+            result = await self._direct_call_tool(
+                server_name, tool_name, arguments, metadata=metadata
+            )
+            return result, {"cacheHit": False, "mode": "bypass"}
+
+        if cache_mode != "refresh":
+            # Try to get from cache first (prefer mode)
+            cached_result = await self.cache.get(cache_key)
+            if cached_result:
+                # Remove internal cache metadata before returning
+                clean_result = {
+                    k: v for k, v in cached_result.items() if not k.startswith("_cache")
+                }
+
+                logger.info(
+                    "Cache hit",
+                    server=server_name,
+                    tool=tool_name,
+                    age_s=cached_result.get("_cache_age_s", 0),
+                    ttl_remaining_s=cached_result.get("_cache_ttl_remaining_s", 0),
+                )
+
+                return clean_result, {
+                    "cacheHit": True,
+                    "cacheAge": cached_result.get("_cache_age_s", 0),
+                    "cacheTtlRemaining": cached_result.get("_cache_ttl_remaining_s", 0),
+                }
+
+        # Cache miss or refresh mode - use singleflight to prevent thundering herd
+        result, cache_meta = await self.cache.invoke_with_singleflight(
+            key=cache_key,
+            call_fn=lambda: self._direct_call_tool(
+                server_name, tool_name, arguments, metadata=metadata
+            ),
+            ttl_s=ttl_s,
+            labels=[server_name, tool_name],
+        )
+
+        # Remove internal cache metadata from result if present
+        if isinstance(result, dict):
+            clean_result = {
+                k: v for k, v in result.items() if not k.startswith("_cache")
+            }
+        else:
+            clean_result = result
+
+        return clean_result, cache_meta
+
+    async def _direct_call_tool(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
-        Call a tool on a specific MCP server.
+        Internal method to directly call a tool without caching.
+
+        This is the original call_tool logic extracted for reuse.
 
         Args:
             server_name: Name of the server
@@ -461,7 +694,7 @@ class MCPRouter:
             prefixed_name = tool_name
 
         logger.info(
-            "Calling tool",
+            "Calling tool directly",
             server=server_name,
             tool=prefixed_name,
             args_keys=list(arguments.keys()),
@@ -492,6 +725,77 @@ class MCPRouter:
                 error=str(e),
             )
             raise
+
+    async def get_health_summary(self) -> Dict[str, Any]:
+        """
+        Get health summary of all MCP servers.
+
+        Returns:
+            Dict containing overall status and per-server health metrics
+        """
+        healthy_count = sum(
+            1 for status in self.health_status.values() if status.status == "healthy"
+        )
+        total_count = len(self.health_status)
+
+        # Calculate average latency for healthy servers
+        latencies = [
+            status.latency_ms
+            for status in self.health_status.values()
+            if status.status == "healthy" and status.latency_ms is not None
+        ]
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+
+        # Build per-server status
+        servers_status = {}
+        for server_name, status in self.health_status.items():
+            servers_status[server_name] = {
+                "status": status.status,
+                "last_success": status.last_success.isoformat()
+                if status.last_success
+                else None,
+                "latency_ms": status.latency_ms,
+                "error": status.error_message,
+            }
+
+        # Determine overall status
+        if healthy_count == total_count:
+            overall_status = "healthy"
+        elif healthy_count > 0:
+            overall_status = "degraded"
+        else:
+            overall_status = "unhealthy"
+
+        return {
+            "status": overall_status,
+            "healthy_servers": healthy_count,
+            "total_servers": total_count,
+            "average_latency_ms": round(avg_latency, 1),
+            "servers": servers_status,
+        }
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics including hit rate and entry count.
+
+        Returns:
+            Dict containing cache metrics
+        """
+        # Get stats from cache service
+        cache_stats = self.cache.stats()
+
+        # Add cache configuration info
+        settings = self.settings
+        cache_stats.update(
+            {
+                "default_ttl": getattr(settings, "cache_ttl_default", 300),
+                "notion_ttl": getattr(settings, "cache_ttl_notion", 300),
+                "github_ttl": getattr(settings, "cache_ttl_github", 900),
+                "cacheable_tools": len(getattr(settings, "CACHEABLE_TOOLS", {})),
+            }
+        )
+
+        return cache_stats
 
     def _start_health_monitoring(self, server_name: str) -> None:
         """
@@ -603,85 +907,6 @@ class MCPRouter:
                 consecutive_failures=status.consecutive_failures,
                 error=str(e),
             )
-
-    async def get_health_summary(self) -> Dict[str, Any]:
-        """
-        Get aggregated health status for all MCP servers.
-
-        Returns:
-            Dictionary with overall status and per-server details
-        """
-        healthy_count = sum(
-            1 for s in self.health_status.values() if s.status == "healthy"
-        )
-        total_count = len(self.health_status)
-
-        # Calculate average latency for healthy servers
-        latencies = [
-            s.ping_latency_ms
-            for s in self.health_status.values()
-            if s.status == "healthy" and s.ping_latency_ms is not None
-        ]
-        avg_latency = sum(latencies) / len(latencies) if latencies else None
-
-        # Overall status
-        if healthy_count == total_count:
-            overall_status = "healthy"
-        elif healthy_count > 0:
-            overall_status = "degraded"
-        else:
-            overall_status = "unhealthy"
-
-        return {
-            "status": overall_status,
-            "healthy_servers": healthy_count,
-            "total_servers": total_count,
-            "average_latency_ms": round(avg_latency, 2) if avg_latency else None,
-            "servers": {
-                name: {
-                    "status": status.status,
-                    "last_success": (
-                        status.last_success_time.isoformat()
-                        if status.last_success_time
-                        else None
-                    ),
-                    "latency_ms": status.ping_latency_ms,
-                    "error": status.error_message,
-                }
-                for name, status in self.health_status.items()
-            },
-        }
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        Get cache statistics for monitoring.
-
-        Returns:
-            Dictionary with cache metrics
-        """
-        total_entries = len(self.tool_cache)
-        total_hits = sum(entry.cache_hit_count for entry in self.tool_cache.values())
-
-        # Calculate cache ages
-        now = datetime.now()
-        cache_ages = {
-            server: (now - entry.cached_at).total_seconds()
-            for server, entry in self.tool_cache.items()
-        }
-
-        return {
-            "total_entries": total_entries,
-            "total_hits": total_hits,
-            "ttl_seconds": self.cache_ttl.total_seconds(),
-            "entries": {
-                server: {
-                    "age_seconds": age,
-                    "hit_count": self.tool_cache[server].cache_hit_count,
-                    "expired": age > self.cache_ttl.total_seconds(),
-                }
-                for server, age in cache_ages.items()
-            },
-        }
 
     async def shutdown(self) -> None:
         """
