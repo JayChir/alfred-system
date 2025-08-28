@@ -5,6 +5,9 @@ This module provides OAuth endpoints for external service integrations:
 - /connect/{provider} - Initiate OAuth flow with redirect to provider
 - /oauth/{provider}/callback - Handle OAuth callback and token exchange
 
+The OAuth tokens obtained here are used to authenticate MCP client connections
+to hosted services (e.g., Notion's hosted MCP at https://mcp.notion.com/mcp).
+
 Security features:
 - CSRF protection with cryptographically secure state tokens
 - User session binding and validation
@@ -12,7 +15,7 @@ Security features:
 - Encrypted token storage immediately after exchange
 
 Supported providers:
-- Notion: Backend OAuth with client credentials
+- Notion: Backend OAuth with client credentials for hosted MCP access
 """
 
 from typing import Optional

@@ -2,7 +2,8 @@
 OAuth Manager service for Alfred Agent Core.
 
 This module handles OAuth flows for external service integrations, starting with Notion.
-Provides secure state management, token exchange, and encrypted token storage.
+Provides secure state management, token exchange, and encrypted token storage for use
+with hosted MCP services.
 
 Security features:
 - Cryptographically secure state tokens with CSRF protection
@@ -14,6 +15,11 @@ Security features:
 OAuth Flow:
 1. /connect/{provider} - Generate state, build authorization URL, redirect
 2. /oauth/{provider}/callback - Validate state, exchange code for tokens, store encrypted
+
+Token Usage:
+- Stored tokens are used to authenticate MCP client connections to hosted services
+- For Notion: tokens authenticate with https://mcp.notion.com/mcp
+- Per-user token injection enables workspace-specific tool access
 """
 
 import base64
@@ -398,7 +404,10 @@ class OAuthManager:
         self, db: AsyncSession, user_id: str, token_response: Dict[str, Any]
     ) -> NotionConnection:
         """
-        Store Notion connection with encrypted tokens.
+        Store Notion connection with encrypted tokens for MCP client authentication.
+        
+        These tokens will be used by MCP clients to authenticate with Notion's
+        hosted MCP service at https://mcp.notion.com/mcp.
 
         Args:
             db: Database session
@@ -406,7 +415,7 @@ class OAuthManager:
             token_response: Token response from Notion API
 
         Returns:
-            Created NotionConnection record
+            Created NotionConnection record with encrypted tokens
         """
         # Extract required fields from token response
         access_token = token_response["access_token"]
