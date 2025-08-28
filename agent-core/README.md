@@ -1,4 +1,108 @@
-# Alfred Agent Core — MVP Development Playbook
+# Alfred Agent Core
+
+**AI Agent with MCP tool routing, caching, and OAuth integration**
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.11+
+- Docker (optional but recommended)
+- `.env` file with your API keys
+
+### 1. Environment Setup
+
+**Copy example environment:**
+```bash
+cp .env.example .env
+```
+
+**Edit `.env` with your keys:**
+```bash
+# Required API Keys
+API_KEY=your-32-character-api-key-here
+ANTHROPIC_API_KEY=sk-ant-your-real-anthropic-key
+
+# Optional: Notion OAuth (for Week 2+)
+NOTION_CLIENT_ID=your-notion-client-id
+NOTION_CLIENT_SECRET=your-notion-client-secret
+```
+
+### 2. Run Locally
+
+**Option A: Docker (Recommended)**
+```bash
+make docker-build
+make docker-run
+# Or use docker-compose
+docker-compose up
+```
+
+**Option B: Native Python**
+```bash
+make install    # Install dependencies
+make run       # Start development server
+```
+
+### 3. Test the API
+
+**Health Check:**
+```bash
+curl http://localhost:8080/healthz
+```
+Expected response:
+```json
+{"status":"ok","version":"0.1.0","environment":"development"}
+```
+
+**Chat with MCP Tools:**
+```bash
+curl -X POST http://localhost:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key-here" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What time is it?"}
+    ]
+  }'
+```
+
+Expected response:
+```json
+{
+  "reply": "The current time in UTC is 04:29 AM...",
+  "meta": {
+    "cacheHit": false,
+    "cacheTtlRemaining": null,
+    "tokens": {"input": 21235, "output": 117},
+    "requestId": "b60adf30-5f7d-479d-a31f-6254e5fc9860"
+  }
+}
+```
+
+### 4. Available MCP Tools
+
+The agent connects to several MCP servers:
+- **Time**: Get current time, convert timezones
+- **GitHub**: Repository operations (personal account)
+- **Notion**: Page and database operations (requires OAuth setup)
+
+### 5. Development Commands
+
+```bash
+make help          # Show all available commands
+make test          # Run test suite
+make lint          # Run linting
+make fmt           # Format code
+make clean         # Clean build artifacts
+```
+
+### 6. API Documentation
+
+Once running, visit: http://localhost:8080/docs
+
+---
+
+## 📚 MVP Development Playbook
 
 > **Purpose**: This document is the single source of truth for building the Alfred Agent Core MVP. Paste this at the start of Claude Code sessions. It defines the roadmap, success metrics, API contracts, data models, ops guardrails, and work packets.
 
