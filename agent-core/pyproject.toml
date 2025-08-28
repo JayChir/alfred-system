@@ -61,6 +61,11 @@ line_length = 88
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "smoke: marks tests as smoke tests",
+    "performance: marks tests as performance tests",
+    "integration: marks tests as integration tests",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

@@ -91,6 +91,14 @@ Each week has: **Goals** → **Deliverables** → **Artifacts** → **Acceptance
 - Repeated calls with same params show `cache_hit=true` in response metadata
 - P95 latency for a repeated read < 500ms (local/dev)
 
+**✅ STATUS: COMPLETE (Issues #1-10)**
+- All Week 1 deliverables implemented and merged
+- Cache middleware with Protocol interface for future Redis migration
+- MCP Router with process_tool_call hooks for transparent caching
+- Allowlist-based caching with per-tool TTL configuration
+- Singleflight pattern prevents thundering herd
+- Next: Start Week 2 OAuth implementation (Issue #11)
+
 ### Week 2 — Notion OAuth + Hosted Notion MCP (per-user)
 
 **Goals**
