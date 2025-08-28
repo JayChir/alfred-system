@@ -137,8 +137,11 @@ class AgentOrchestrator:
         """
         Get only healthy MCP servers as toolsets.
 
+        The servers already have process_tool_call hooks for caching
+        configured during initialization in the MCP router.
+
         Returns:
-            List of healthy MCP server instances
+            List of healthy MCP server instances with cache support
         """
         if not self.router:
             return []
@@ -148,8 +151,9 @@ class AgentOrchestrator:
         for server_name, server in self.router.servers.items():
             status = self.router.health_status.get(server_name)
             if status and status.status == "healthy":
+                # Server already has process_tool_call hook for caching
                 healthy_toolsets.append(server)
-                logger.debug(f"Including healthy server: {server_name}")
+                logger.debug(f"Including healthy server with cache: {server_name}")
             else:
                 logger.debug(f"Excluding unhealthy server: {server_name}")
 
