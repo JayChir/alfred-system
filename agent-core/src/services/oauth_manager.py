@@ -405,7 +405,7 @@ class OAuthManager:
     ) -> NotionConnection:
         """
         Store Notion connection with encrypted tokens for MCP client authentication.
-        
+
         These tokens will be used by MCP clients to authenticate with Notion's
         hosted MCP service at https://mcp.notion.com/mcp.
 
