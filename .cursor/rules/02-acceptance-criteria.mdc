@@ -1,0 +1,16 @@
+---
+description: MVP ACs – what "done" means
+alwaysApply: true
+---
+
+# Week 1
+- FastAPI skeleton (`/healthz`, `/chat`), remote MCP calls, in-memory cache w/ TTL + cache_hit meta.
+
+# Week 2
+- Notion OAuth: `/connect/notion`, `/oauth/notion/callback`; tokens encrypted; refresh verified; hosted Notion MCP per-user.
+
+# Week 3
+- PG cache backend + session continuity; `forceRefresh` path; cache-hit script shows >70% in dev; token counters in response meta.
+
+# Week 4
+- `/chat/stream` SSE with heartbeat + reconnect; rate limits & timeouts; basic integration tests.

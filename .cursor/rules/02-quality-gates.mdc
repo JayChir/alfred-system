@@ -1,0 +1,8 @@
+---
+description: Quality gates for reviews and PRs
+alwaysApply: true
+---
+
+- Add request_id; time DB/MCP/cache; record token counts; redact secrets.
+- Caching: TTL map + invalidation on writes + `forceRefresh` path.
+- SSE: heartbeat + reconnect (`Last-Event-ID`) + tests.

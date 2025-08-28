@@ -1,0 +1,8 @@
+---
+description: SSE protocol expectations
+alwaysApply: true
+---
+
+- Endpoint: `GET /chat/stream` (text/event-stream). Events: `token`, `tool`, `message`, `heartbeat`, `done`.
+- Heartbeat every N seconds; reconnect via `Last-Event-ID`; idempotent resume; backoff on failures.
+- Tests: open/close stream, heartbeat cadence, reconnect with last id, transient MCP failure retry.

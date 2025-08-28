@@ -1,0 +1,9 @@
+---
+description: Cache policy & expectations
+alwaysApply: true
+---
+
+- Target ~90% hit on repeat Notion reads; sub-second on cache hits.
+- Read-through; write-path invalidation on mutations; configurable TTL map; `forceRefresh=true` escape hatch.
+- PG schema records `hit_count`, `expires_at`, `content_hash` for change detection & metrics.
+- Batch Notion writes via "smart staging" to cut API calls ~70%.

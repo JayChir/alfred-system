@@ -1,0 +1,8 @@
+---
+description: Logging, metrics, and cost guardrails
+alwaysApply: true
+---
+
+- Log request_id; timings for DB/MCP/cache; cache outcome; token counts in response meta.
+- Track session tokens and warn at ~80% capacity; show per-session cost trend.
+- Budget guardrail: <$40–$100/mo total; per-session <$2; performance-first early.

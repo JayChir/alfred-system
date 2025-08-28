@@ -96,7 +96,7 @@ class TestSmokePerformance:
 
             # Make multiple identical requests
             responses = []
-            for i in range(5):
+            for _ in range(5):
                 response = test_client.post("/api/v1/chat", json=chat_request)
                 if response.status_code == 200:
                     responses.append(response.json())
@@ -148,7 +148,7 @@ class TestSmokePerformance:
                 error_data = response.json()
                 assert "error" in error_data
                 assert "message" in error_data
-            except:
+            except Exception:
                 # Some error cases might not return JSON
                 pass
 
@@ -228,7 +228,7 @@ class TestSmokePerformance:
 
             # Make many requests
             for i in range(20):
-                response = test_client.post("/api/v1/chat", json=chat_request)
+                _ = test_client.post("/api/v1/chat", json=chat_request)
 
                 # Force garbage collection periodically
                 if i % 5 == 0:
@@ -257,7 +257,7 @@ class TestSmokePerformance:
         # Add authorization header to test secret redaction
         headers = {"Authorization": "Bearer secret-api-key-12345"}
 
-        response = test_client.post("/api/v1/chat", json=chat_request, headers=headers)
+        _ = test_client.post("/api/v1/chat", json=chat_request, headers=headers)
 
         # Check logs were generated
         logs = captured_logs.get_structured_logs()

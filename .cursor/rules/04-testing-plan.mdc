@@ -1,0 +1,8 @@
+---
+description: Test planning skeleton
+alwaysApply: true
+---
+
+- Unit: cache keys/TTL resolver/token meter/OAuth refresh.
+- Integration: Notion OAuth + hosted MCP, cache hit/miss, SSE reconnect.
+- Perf smoke: loop measure P95 and cache-hit; print token deltas.
