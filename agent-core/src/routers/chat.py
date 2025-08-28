@@ -28,14 +28,14 @@ class Message(BaseModel):
     role: str = Field(
         ...,
         description="Message role (user, assistant, system)",
-        example="user",
         pattern="^(user|assistant|system)$",
+        json_schema_extra={"example": "user"},
     )
     content: str = Field(
         ...,
         description="Message content",
-        example="What is the capital of France?",
         min_length=1,
+        json_schema_extra={"example": "What is the capital of France?"},
     )
 
 
@@ -45,22 +45,22 @@ class ChatRequest(BaseModel):
     messages: List[Message] = Field(
         ...,
         description="Conversation messages",
-        min_items=1,
-        example=[{"role": "user", "content": "Hello!"}],
+        min_length=1,
+        json_schema_extra={"example": [{"role": "user", "content": "Hello!"}]},
     )
     session: Optional[str] = Field(
         None,
         description="Optional session token for conversation continuity",
-        example="session-123-abc",
+        json_schema_extra={"example": "session-123-abc"},
     )
     forceRefresh: bool = Field(
-        False, description="Force cache bypass for fresh results", example=False
+        False,
+        description="Force cache bypass for fresh results",
+        json_schema_extra={"example": False},
     )
 
-    class Config:
-        """Pydantic model configuration."""
-
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "messages": [
                     {"role": "user", "content": "What's the weather like today?"}
@@ -69,6 +69,7 @@ class ChatRequest(BaseModel):
                 "forceRefresh": False,
             }
         }
+    }
 
 
 class TokenUsage(BaseModel):
@@ -91,7 +92,7 @@ class ResponseMeta(BaseModel):
     requestId: str = Field(
         ...,
         description="Unique request identifier for tracing",
-        example="123e4567-e89b-12d3-a456-426614174000",
+        json_schema_extra={"example": "123e4567-e89b-12d3-a456-426614174000"},
     )
 
 
@@ -101,16 +102,14 @@ class ChatResponse(BaseModel):
     reply: str = Field(
         ...,
         description="Agent's response to the user",
-        example="Paris is the capital of France.",
+        json_schema_extra={"example": "Paris is the capital of France."},
     )
     meta: ResponseMeta = Field(
         ..., description="Response metadata including cache and token info"
     )
 
-    class Config:
-        """Pydantic model configuration."""
-
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "reply": "The capital of France is Paris.",
                 "meta": {
@@ -121,6 +120,7 @@ class ChatResponse(BaseModel):
                 },
             }
         }
+    }
 
 
 # Dependency for API key authentication
