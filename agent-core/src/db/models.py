@@ -268,3 +268,127 @@ class NotionConnection(Base):
             f"<NotionConnection(id={self.id}, user_id={self.user_id}, "
             f"workspace_id={self.workspace_id}, status={status})>"
         )
+
+
+class OAuthState(Base):
+    """
+    OAuth state management for CSRF protection and user binding.
+
+    Stores cryptographically secure state tokens with TTL for OAuth flows.
+    Each state is bound to a user session and includes optional return_to URL.
+
+    Security features:
+    - Cryptographically random state tokens
+    - User session binding to prevent CSRF attacks
+    - TTL expiration (typically 10-15 minutes)
+    - One-time use enforcement
+
+    Attributes:
+        id: Unique state identifier (UUID)
+        state: Cryptographically random state token
+        user_id: Optional user ID for authenticated flows
+        session_id: Session identifier for user binding
+        provider: OAuth provider (notion, github, etc.)
+        return_to: Optional return URL after successful auth
+        created_at: State creation timestamp
+        expires_at: State expiration timestamp (TTL enforcement)
+        used_at: Usage timestamp (NULL = unused, set when consumed)
+    """
+
+    __tablename__ = "oauth_states"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique state identifier",
+    )
+
+    # State token (cryptographically random)
+    state: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
+        nullable=False,
+        doc="Cryptographically random state token for CSRF protection",
+    )
+
+    # User and session binding
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        doc="Optional user ID for authenticated flows",
+    )
+
+    session_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, doc="Session identifier for user binding"
+    )
+
+    # OAuth provider
+    provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, doc="OAuth provider (notion, github, etc.)"
+    )
+
+    # Return URL for post-auth navigation
+    return_to: Mapped[Optional[str]] = mapped_column(
+        String(2048),
+        nullable=True,
+        doc="Optional return URL after successful authentication",
+    )
+
+    # Timestamps for TTL and usage tracking
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        doc="State creation timestamp",
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        doc="State expiration timestamp (TTL enforcement)",
+    )
+
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, doc="Usage timestamp (NULL = unused)"
+    )
+
+    # Indexes and constraints
+    __table_args__ = (
+        # Index on state token for fast lookups
+        Index("ix_oauth_state_token", "state"),
+        # Index on expiration for cleanup queries
+        Index("ix_oauth_state_expires", "expires_at"),
+        # Index on provider + created_at for analytics
+        Index("ix_oauth_state_provider_created", "provider", "created_at"),
+    )
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if this state token is expired."""
+        return datetime.now(timezone.utc) >= self.expires_at
+
+    @property
+    def is_used(self) -> bool:
+        """Check if this state token has been used."""
+        return self.used_at is not None
+
+    @property
+    def is_valid(self) -> bool:
+        """Check if this state token is valid (not expired and not used)."""
+        return not self.is_expired and not self.is_used
+
+    def mark_used(self) -> None:
+        """Mark this state token as used."""
+        self.used_at = datetime.now(timezone.utc)
+
+    def __repr__(self) -> str:
+        status = (
+            "valid" if self.is_valid else ("expired" if self.is_expired else "used")
+        )
+        return (
+            f"<OAuthState(id={self.id}, provider={self.provider}, "
+            f"state={self.state[:8]}..., status={status})>"
+        )
