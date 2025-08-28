@@ -148,6 +148,16 @@ class Settings(BaseSettings):
         description="Notion OAuth callback URL",
     )
 
+    notion_auth_url: str = Field(
+        default="https://api.notion.com/v1/oauth/authorize",
+        description="Notion OAuth authorization endpoint",
+    )
+
+    notion_token_url: str = Field(
+        default="https://api.notion.com/v1/oauth/token",
+        description="Notion OAuth token exchange endpoint",
+    )
+
     # ===== Security & Encryption =====
     fernet_key: Optional[str] = Field(
         default=None,
