@@ -199,6 +199,37 @@ async def chat_endpoint(
     orchestrator = None
 
     try:
+        # Trigger on-demand token refresh for all user connections (Phase 4 - Issue #16)
+        try:
+            # OAuth manager integration ready for when user auth is implemented
+            # from src.config import get_settings
+            # from src.services.oauth_manager import OAuthManager
+            # from src.utils.crypto import CryptoService
+
+            # settings = get_settings()
+            # crypto_service = CryptoService(settings.fernet_key)
+            # oauth_manager = OAuthManager(settings, crypto_service)
+
+            # For MVP, we don't have user authentication yet, so we'll skip user-specific refresh
+            # When user authentication is implemented, this would be:
+            # user_id = get_current_user_id(request)
+            # async with get_db() as db:
+            #     await oauth_manager.ensure_token_fresh(db, user_id)
+
+            logger.debug(
+                "OAuth token refresh integration ready",
+                request_id=request_id,
+            )
+
+        except Exception as refresh_e:
+            # Don't fail the chat request if token refresh fails
+            logger.warning(
+                "OAuth token refresh failed",
+                request_id=request_id,
+                error=str(refresh_e),
+                error_type=type(refresh_e).__name__,
+            )
+
         # Get the agent orchestrator
         orchestrator = await get_agent_orchestrator()
 
