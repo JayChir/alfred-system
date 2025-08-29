@@ -247,6 +247,14 @@ async def chat_endpoint(
                 detail="No user message found in request",
             )
 
+        # Extract user_id from session or headers (MVP - will be from JWT in production)
+        # For now, we'll check for an X-User-ID header or use session as fallback
+        user_id = request.headers.get("X-User-ID")
+        if not user_id and chat_request.session:
+            # In production, decode session JWT to get user_id
+            # For MVP, use session ID as user_id placeholder
+            user_id = chat_request.session
+
         # Process through agent orchestrator
         if stream:
             # Streaming response
@@ -256,6 +264,7 @@ async def chat_endpoint(
                     async for event in orchestrator.chat(
                         prompt=prompt,
                         session_id=chat_request.session,
+                        user_id=user_id,
                         stream=True,
                         force_refresh=chat_request.forceRefresh,
                     ):
@@ -283,6 +292,7 @@ async def chat_endpoint(
             result = await orchestrator.chat(
                 prompt=prompt,
                 session_id=chat_request.session,
+                user_id=user_id,
                 stream=False,
                 force_refresh=chat_request.forceRefresh,
             )
@@ -342,6 +352,7 @@ async def chat_endpoint(
     response_description="SSE stream of chat events",
 )
 async def chat_stream_endpoint(
+    request: Request,
     prompt: str,
     session: Optional[str] = None,
     api_key: str = Depends(verify_api_key),
@@ -373,6 +384,11 @@ async def chat_stream_endpoint(
         # Get the agent orchestrator
         orchestrator = await get_agent_orchestrator()
 
+        # Extract user_id from headers or session
+        user_id = request.headers.get("X-User-ID")
+        if not user_id and session:
+            user_id = session
+
         # Create async generator for SSE
         async def event_generator():
             """Generate Server-Sent Events for streaming."""
@@ -380,6 +396,7 @@ async def chat_stream_endpoint(
                 async for event in orchestrator.chat(
                     prompt=prompt,
                     session_id=session,
+                    user_id=user_id,
                     stream=True,
                 ):
                     # Format as SSE

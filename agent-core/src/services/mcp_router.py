@@ -16,6 +16,11 @@ import httpx
 import logfire
 from pydantic_ai.mcp import MCPServerSSE, MCPServerStreamableHTTP
 
+from src.clients.notion_mcp_client import (
+    NotionMCPClients,
+    is_auth_or_transport_error,
+    is_unauthorized_error,
+)
 from src.config import Settings, get_settings
 from src.services.cache_service import (
     MemoryInvokeCache,
@@ -97,6 +102,7 @@ class MCPRouter:
         settings: Optional[Settings] = None,
         cache_ttl_minutes: int = 10,
         http_timeout_seconds: float = 100.0,
+        notion_clients: Optional[NotionMCPClients] = None,
     ):
         """
         Initialize the MCP Router.
@@ -105,6 +111,7 @@ class MCPRouter:
             settings: Application settings with MCP server URLs
             cache_ttl_minutes: Tool cache TTL in minutes (default 10)
             http_timeout_seconds: HTTP timeout for MCP requests
+            notion_clients: Optional Notion MCP client factory
         """
         self.settings = settings or get_settings()
         self.cache_ttl = timedelta(minutes=cache_ttl_minutes)
@@ -130,6 +137,9 @@ class MCPRouter:
 
         # Initialize cache service for tool invocation results
         self.cache: MemoryInvokeCache = get_cache_service()
+
+        # Notion MCP client factory for per-user clients
+        self.notion_clients = notion_clients
 
     def _create_http_client(self) -> httpx.AsyncClient:
         """
@@ -253,6 +263,7 @@ class MCPRouter:
 
                         deps = getattr(ctx, "deps", SimpleNamespace())
                         user_scope = getattr(deps, "user_scope", "global")
+                        user_id = getattr(deps, "user_id", None)
                         cache_mode = getattr(deps, "cache_mode", "prefer")
 
                         # Check if tool is cacheable
@@ -318,17 +329,66 @@ class MCPRouter:
                             mode=cache_mode,
                         )
 
-                        result = await call_tool(
-                            name, tool_args
-                        )  # Use provided callback
+                        try:
+                            result = await call_tool(
+                                name, tool_args
+                            )  # Use provided callback
+                        except Exception as e:
+                            # Check if it's a 401 error from Notion
+                            if (
+                                current_config.name == "notion"
+                                and is_unauthorized_error(e)
+                            ):
+                                logger.warning(
+                                    "Notion 401 error, attempting token refresh and retry",
+                                    server=current_config.name,
+                                    tool=name,
+                                    error=str(e),
+                                )
 
-                        # Cache the result
-                        await self.cache.set(
-                            key,
-                            result if isinstance(result, dict) else {"result": result},
-                            ttl_s=ttl,
-                            labels=[current_config.name, name],
-                        )
+                                # One-shot retry with token refresh
+                                if user_id and self.notion_clients:
+                                    # Refresh token (may be no-op if already fresh)
+                                    from ..db import get_async_session
+
+                                    async with get_async_session() as db:
+                                        await self.notion_clients.oauth.ensure_token_fresh(
+                                            db, user_id
+                                        )
+
+                                    # Evict cached client to force rebuild
+                                    await self.notion_clients.evict(user_id)
+
+                                    # Retry the call once
+                                    logger.info(
+                                        "Retrying Notion tool call after token refresh",
+                                        server=current_config.name,
+                                        tool=name,
+                                    )
+                                    result = await call_tool(name, tool_args)
+                                else:
+                                    # Can't retry without user context
+                                    raise
+                            else:
+                                # Not a 401 or not Notion - re-raise
+                                raise
+
+                        # Never cache auth or transport errors
+                        if not is_auth_or_transport_error(result):
+                            await self.cache.set(
+                                key,
+                                result
+                                if isinstance(result, dict)
+                                else {"result": result},
+                                ttl_s=ttl,
+                                labels=[current_config.name, name],
+                            )
+                        else:
+                            logger.warning(
+                                "Not caching auth/transport error result",
+                                server=current_config.name,
+                                tool=name,
+                            )
 
                         return result
 
@@ -553,6 +613,46 @@ class MCPRouter:
             toolset_count=len(toolsets),
             servers=[name for name, s in self.servers.items() if s in toolsets],
         )
+
+        return toolsets
+
+    async def get_toolsets_for_user(self, user_id: Optional[str] = None) -> List[Any]:
+        """
+        Get toolsets including user-specific Notion MCP if connected.
+
+        This method:
+        1. Returns base toolsets (time, github, etc.) for all users
+        2. Adds user's Notion MCP client if they have a valid connection
+        3. Respects feature flags for hosted vs self-hosted Notion
+
+        Args:
+            user_id: Optional user ID for per-user toolsets
+
+        Returns:
+            List of MCP server instances available to the user
+        """
+        # Start with base toolsets available to all users
+        toolsets = self.get_unified_toolsets()
+
+        # Add user-specific Notion if configured and connected
+        if user_id and self.notion_clients and self.settings.FEATURE_NOTION_HOSTED_MCP:
+            try:
+                # Get or create Notion client for user
+                notion_client = await self.notion_clients.get(user_id)
+                if notion_client:
+                    toolsets.append(notion_client)
+                    logger.info(
+                        "Added user-specific Notion MCP client",
+                        user_id=user_id,
+                        total_toolsets=len(toolsets),
+                    )
+            except Exception as e:
+                logger.error(
+                    "Failed to get Notion client for user",
+                    user_id=user_id,
+                    error=str(e),
+                )
+                # Continue without Notion tools rather than failing entirely
 
         return toolsets
 
@@ -950,7 +1050,20 @@ async def get_mcp_router() -> MCPRouter:
     global _router_instance
 
     if _router_instance is None:
-        _router_instance = MCPRouter()
+        settings = get_settings()
+
+        # Initialize Notion MCP clients if feature is enabled
+        notion_clients = None
+        if settings.FEATURE_NOTION_HOSTED_MCP:
+            from ..clients import get_notion_mcp_clients
+
+            notion_clients = await get_notion_mcp_clients()
+            logger.info("Initialized Notion MCP client factory for per-user toolsets")
+
+        _router_instance = MCPRouter(
+            settings=settings,
+            notion_clients=notion_clients,
+        )
         await _router_instance.initialize()
 
     return _router_instance
