@@ -15,6 +15,7 @@ from typing import Optional
 
 from sqlalchemy import (
     ARRAY,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -122,6 +123,10 @@ class NotionConnection(Base):
         access_token_expires_at: Access token expiration
         refresh_token_expires_at: Refresh token expiration (nullable)
         key_version: Encryption key version for rotation
+        supports_refresh: Whether connection supports token refresh
+        last_refresh_attempt: Timestamp of last refresh attempt
+        refresh_failure_count: Number of consecutive refresh failures
+        needs_reauth: Whether re-authentication is required
         revoked_at: Revocation timestamp (NULL = active)
     """
 
@@ -186,6 +191,34 @@ class NotionConnection(Base):
         nullable=False,
         default=1,
         doc="Encryption key version for rotation support",
+    )
+
+    # Token refresh tracking (Phase 1 - Issue #16)
+    supports_refresh: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Whether this connection supports token refresh (has valid refresh_token)",
+    )
+
+    last_refresh_attempt: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Timestamp of last refresh attempt (success or failure)",
+    )
+
+    refresh_failure_count: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        default=0,
+        doc="Number of consecutive refresh failures (reset to 0 on success)",
+    )
+
+    needs_reauth: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Whether this connection requires user re-authentication due to terminal refresh errors",
     )
 
     # Connection lifecycle
@@ -261,6 +294,53 @@ class NotionConnection(Base):
     def revoke(self) -> None:
         """Mark this connection as revoked."""
         self.revoked_at = datetime.now(timezone.utc)
+
+    # Token refresh helper methods (Phase 1 - Issue #16)
+    @property
+    def is_refresh_capable(self) -> bool:
+        """Check if this connection can perform token refresh."""
+        return (
+            self.supports_refresh
+            and self.refresh_token_ciphertext is not None
+            and not self.needs_reauth
+            and self.is_active
+        )
+
+    @property
+    def refresh_failure_threshold_exceeded(self) -> bool:
+        """Check if refresh failures exceed threshold (3 consecutive failures)."""
+        return self.refresh_failure_count >= 3
+
+    def mark_refresh_success(self) -> None:
+        """Mark a successful token refresh operation."""
+        self.last_refresh_attempt = datetime.now(timezone.utc)
+        self.refresh_failure_count = 0
+        self.needs_reauth = False
+
+    def mark_refresh_failure(self, is_terminal_error: bool = False) -> None:
+        """
+        Mark a failed token refresh operation.
+
+        Args:
+            is_terminal_error: Whether this is a terminal error requiring re-auth
+        """
+        self.last_refresh_attempt = datetime.now(timezone.utc)
+        self.refresh_failure_count += 1
+
+        # Mark for re-auth on terminal errors or after threshold failures
+        if is_terminal_error or self.refresh_failure_threshold_exceeded:
+            self.needs_reauth = True
+
+    def update_refresh_capability(self, has_refresh_token: bool) -> None:
+        """
+        Update refresh capability based on token response analysis.
+
+        Args:
+            has_refresh_token: Whether the connection has a valid refresh token
+        """
+        self.supports_refresh = (
+            has_refresh_token and self.refresh_token_ciphertext is not None
+        )
 
     def __repr__(self) -> str:
         status = "active" if self.is_active else "revoked"
