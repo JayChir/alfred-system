@@ -310,7 +310,7 @@ async def oauth_health() -> Dict[str, Any]:
     try:
         # Get dependencies (simulate dependency injection for health check)
         settings = get_settings()
-        crypto_service = CryptoService()
+        crypto_service = CryptoService(settings.fernet_key)
         oauth_manager = OAuthManager(settings, crypto_service)
 
         # Get database connection

@@ -53,10 +53,15 @@ class CryptoService:
         plaintext = crypto.decrypt_token(ciphertext)
     """
 
-    def __init__(self):
-        """Initialize CryptoService with MultiFernet from environment variables."""
-        # Load primary key from FERNET_KEY (this will be the newest key used for encryption)
-        primary_key_b64 = os.getenv("FERNET_KEY")
+    def __init__(self, primary_key_b64: Optional[str] = None):
+        """Initialize CryptoService with a provided key or environment variables.
+
+        Args:
+            primary_key_b64: Optional base64-encoded Fernet key. If not provided,
+                           will load from FERNET_KEY environment variable.
+        """
+        # Use provided key or load from environment
+        primary_key_b64 = primary_key_b64 or os.getenv("FERNET_KEY")
         if not primary_key_b64:
             raise CryptoServiceError(
                 "FERNET_KEY environment variable is required. "

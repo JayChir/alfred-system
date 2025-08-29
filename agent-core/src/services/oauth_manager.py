@@ -1026,6 +1026,33 @@ class OAuthManager:
             lock = self._get_refresh_lock(connection_id)
 
             async with lock:
+                # Best-effort cross-process lock using PostgreSQL advisory locks
+                # This prevents multiple processes from refreshing the same token
+                try:
+                    from ..db import try_advisory_lock
+
+                    # Try to acquire advisory lock for this connection
+                    if not await try_advisory_lock(db, connection.id):
+                        logger.debug(
+                            "Advisory lock not acquired, another process is refreshing",
+                            connection_id=connection_id,
+                            user_id=user_id,
+                        )
+                        continue
+                except ImportError:
+                    # Database module doesn't have advisory lock support yet
+                    logger.debug(
+                        "Advisory locks not available, using in-process locks only",
+                        connection_id=connection_id,
+                    )
+                except Exception as e:
+                    # Don't fail if advisory lock fails, just log and continue
+                    logger.debug(
+                        "Advisory lock attempt failed, continuing with in-process lock",
+                        connection_id=connection_id,
+                        error=str(e),
+                    )
+
                 # Double-check expiry under lock to avoid duplicate refresh
                 # Another concurrent request might have already refreshed this token
                 await db.refresh(connection)
