@@ -44,7 +44,7 @@ class TestTokenRefreshIntegration:
     @pytest.fixture
     async def crypto_service(self, mock_settings):
         """Create crypto service for token encryption."""
-        return CryptoService(mock_settings.fernet_key)
+        return CryptoService()
 
     @pytest.fixture
     async def oauth_manager(self, mock_settings, crypto_service):

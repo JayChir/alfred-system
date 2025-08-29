@@ -36,8 +36,7 @@ class TestHealthMonitoring:
     @pytest.fixture
     async def crypto_service(self):
         """Crypto service for token encryption."""
-        settings = get_settings()
-        return CryptoService(settings.fernet_key)
+        return CryptoService()
 
     @pytest.fixture
     async def sample_connections(
@@ -308,7 +307,7 @@ class TestHealthMonitoring:
         """Test health endpoint responds quickly even with many connections."""
 
         # Create many test connections
-        crypto_service = CryptoService(get_settings().fernet_key)
+        crypto_service = CryptoService()
         now = datetime.now(timezone.utc)
 
         # Create 50 connections with various states
