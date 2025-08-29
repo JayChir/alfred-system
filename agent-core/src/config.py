@@ -158,6 +158,58 @@ class Settings(BaseSettings):
         description="Notion OAuth token exchange endpoint",
     )
 
+    # ===== OAuth Token Refresh Configuration (Issue #16) =====
+    oauth_refresh_window_minutes: int = Field(
+        default=5,
+        description="Time window before token expiry to trigger proactive refresh",
+        ge=1,
+        le=60,
+    )
+
+    oauth_refresh_jitter_seconds: int = Field(
+        default=60,
+        description="Maximum jitter in seconds to prevent thundering herd during refresh",
+        ge=0,
+        le=300,
+    )
+
+    oauth_refresh_clock_skew_seconds: int = Field(
+        default=60,
+        description="Clock skew tolerance in seconds when checking token expiry",
+        ge=0,
+        le=300,
+    )
+
+    oauth_refresh_max_retries: int = Field(
+        default=3,
+        description="Maximum retry attempts for transient refresh failures",
+        ge=1,
+        le=10,
+    )
+
+    oauth_refresh_base_delay_ms: int = Field(
+        default=100,
+        description="Base delay in milliseconds for exponential backoff",
+        ge=10,
+        le=5000,
+    )
+
+    oauth_max_failure_count: int = Field(
+        default=5,
+        description="Maximum consecutive failures before requiring re-authentication",
+        ge=1,
+        le=20,
+    )
+
+    oauth_health_check_enabled: bool = Field(
+        default=True, description="Enable OAuth health monitoring endpoints"
+    )
+
+    oauth_background_refresh_enabled: bool = Field(
+        default=True,
+        description="Enable background token refresh service (hybrid strategy)",
+    )
+
     # ===== Security & Encryption =====
     fernet_key: Optional[str] = Field(
         default=None,

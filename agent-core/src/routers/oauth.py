@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
-from ..db.session import get_db_session
+from ..db import get_db_session
 from ..services.oauth_manager import (
     OAuthManager,
     OAuthManagerError,
@@ -73,7 +73,7 @@ def get_oauth_manager(settings: Settings = Depends(get_settings)) -> OAuthManage
     Returns:
         OAuth Manager with crypto service
     """
-    crypto_service = CryptoService()
+    crypto_service = CryptoService(settings.fernet_key)
     return OAuthManager(settings, crypto_service)
 
 

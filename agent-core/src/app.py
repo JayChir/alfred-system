@@ -126,10 +126,11 @@ async def lifespan(app: FastAPI):
             logger.error("Production validation failed", error=str(e))
             sys.exit(1)
 
-    # Initialize MCP router and agent orchestrator during startup
-    # This ensures MCP connections are established before handling requests
+    # Initialize MCP router, agent orchestrator, and background services during startup
+    # This ensures all services are established before handling requests
     mcp_router = None
     orchestrator = None
+    token_refresh_service = None
 
     try:
         # Initialize MCP router first
@@ -157,6 +158,24 @@ async def lifespan(app: FastAPI):
         orchestrator = await get_agent_orchestrator()
         logger.info("Agent orchestrator initialized with MCP toolsets")
 
+        # Initialize background token refresh service (Phase 4 - Issue #16)
+        if settings.oauth_background_refresh_enabled:
+            try:
+                from src.services.token_refresh_service import get_token_refresh_service
+
+                token_refresh_service = await get_token_refresh_service()
+                await token_refresh_service.start()
+                logger.info("Background token refresh service started successfully")
+            except Exception as service_e:
+                logger.warning(
+                    "Failed to start background token refresh service",
+                    error=str(service_e),
+                    error_type=type(service_e).__name__,
+                )
+                # Continue without background refresh - on-demand refresh will still work
+        else:
+            logger.info("Background token refresh service disabled by configuration")
+
     except Exception as e:
         logger.error(
             "Failed to initialize MCP services during startup",
@@ -171,8 +190,13 @@ async def lifespan(app: FastAPI):
     # Shutdown tasks
     logger.info("Application shutting down", app_name=settings.app_name)
 
-    # Clean shutdown of MCP connections
+    # Clean shutdown of all services
     try:
+        # Stop background token refresh service first (Phase 4 - Issue #16)
+        if token_refresh_service:
+            await token_refresh_service.stop()
+            logger.info("Background token refresh service shutdown complete")
+
         if orchestrator:
             await orchestrator.shutdown()
             logger.info("Agent orchestrator shutdown complete")
