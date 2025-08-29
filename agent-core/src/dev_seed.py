@@ -24,13 +24,13 @@ except ImportError:
 
 from contextlib import asynccontextmanager
 
+from src.db import create_tables, get_async_session
 from src.db.repositories import (
     DuplicateConnectionError,
     NotionConnectionsRepository,
     RepositoryError,
     UsersRepository,
 )
-from src.db.session import create_tables, get_async_session
 from src.utils.crypto import generate_fernet_key, get_crypto_service
 
 

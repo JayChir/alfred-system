@@ -48,7 +48,7 @@ class TestEndToEndWorkflows:
     async def test_setup(self, db_session: AsyncSession, test_user: User):
         """Complete test setup with user, connection, and services."""
         settings = get_settings()
-        crypto_service = CryptoService(settings.fernet_key)
+        crypto_service = CryptoService()
 
         # Create connection expiring soon (30 seconds)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)

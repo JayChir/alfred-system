@@ -7,12 +7,14 @@ MCP router functionality, cache behavior, and logging assertions.
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, AsyncGenerator, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Set test environment before importing app - use actual .env values but override specific test settings
 os.environ.update(
@@ -313,3 +315,46 @@ def performance_monitor():
             ), f"{operation2} ({dur2:.3f}s) should be {factor}x faster than {operation1} ({dur1:.3f}s)"
 
     return PerformanceMonitor()
+
+
+# Database fixtures for integration testing
+@pytest_asyncio.fixture(scope="function")
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Provide a transactional database session for testing.
+
+    Each test gets its own transaction that's rolled back after the test,
+    ensuring test isolation without database recreation.
+
+    Note: Requires PostgreSQL database. Set DATABASE_URL environment variable
+    to point to a test database. For CI, use Docker or testcontainers-python.
+    """
+    import os
+
+    # Skip database tests if no DATABASE_URL is set
+    if not os.getenv("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not set - skipping database tests")
+
+    # Import here to avoid circular dependencies
+    from src.db import create_tables, get_test_session
+
+    # Create tables for this test run (if not exists)
+    await create_tables()
+
+    # Get a test session with transaction isolation
+    async with get_test_session() as session:
+        yield session
+    # Transaction automatically rolled back by get_test_session
+
+
+@pytest.fixture
+def crypto_service():
+    """
+    Provide a crypto service for testing token encryption/decryption.
+
+    Uses the environment-configured Fernet key.
+    """
+    from src.utils.crypto import CryptoService
+
+    # CryptoService gets key from environment
+    return CryptoService()

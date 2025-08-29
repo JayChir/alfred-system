@@ -303,14 +303,14 @@ async def oauth_health() -> Dict[str, Any]:
             ]
         }
     """
-    from src.db.database import get_db
+    from src.db import get_db
     from src.services.oauth_manager import OAuthManager
     from src.utils.crypto import CryptoService
 
     try:
         # Get dependencies (simulate dependency injection for health check)
         settings = get_settings()
-        crypto_service = CryptoService(settings.fernet_key)
+        crypto_service = CryptoService()
         oauth_manager = OAuthManager(settings, crypto_service)
 
         # Get database connection

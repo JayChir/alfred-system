@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..db.database import get_async_session
+from ..db import get_async_session
 from ..db.models import NotionConnection
 from ..services.oauth_manager import OAuthManager
 from ..utils.alerting import get_alert_manager
@@ -498,7 +498,7 @@ async def get_token_refresh_service() -> TokenRefreshService:
         from ..config import get_settings
 
         settings = get_settings()
-        crypto_service = CryptoService(settings.fernet_key)
+        crypto_service = CryptoService()
         _token_refresh_service = TokenRefreshService(settings, crypto_service)
 
     return _token_refresh_service

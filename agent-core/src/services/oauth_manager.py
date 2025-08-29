@@ -141,7 +141,9 @@ class OAuthManager:
 
         # HTTP client for token exchange requests
         self.http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=3.0, read=10.0),  # Conservative timeouts
+            timeout=httpx.Timeout(
+                connect=3.0, read=10.0, write=10.0, pool=10.0
+            ),  # Explicit timeouts for all phases
             follow_redirects=False,  # OAuth requires manual redirect handling
         )
 

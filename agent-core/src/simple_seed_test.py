@@ -15,12 +15,12 @@ except ImportError:
 
 from contextlib import asynccontextmanager
 
+from src.db import create_tables, get_async_session
 from src.db.repositories import (
     NotionConnectionsRepository,
     RepositoryError,
     UsersRepository,
 )
-from src.db.session import create_tables, get_async_session
 from src.utils.crypto import get_crypto_service
 
 
