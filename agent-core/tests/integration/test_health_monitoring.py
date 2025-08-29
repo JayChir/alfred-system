@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app import app
-from src.config import get_settings
 from src.db.models import NotionConnection
 from src.services.token_refresh_service import get_token_refresh_service
 from src.utils.alerting import Alert, AlertCategory, AlertManager, AlertSeverity
