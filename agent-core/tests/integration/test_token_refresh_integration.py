@@ -63,8 +63,8 @@ class TestTokenRefreshIntegration:
             user_id="test-user-123",
             workspace_id="test-workspace-456",
             workspace_name="Test Workspace",
-            access_token=crypto_service.encrypt("test-access-token"),
-            refresh_token=crypto_service.encrypt("test-refresh-token"),
+            access_token_ciphertext=crypto_service.encrypt_token("test-access-token"),
+            refresh_token_ciphertext=crypto_service.encrypt_token("test-refresh-token"),
             expires_at=expires_at,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -147,8 +147,10 @@ class TestTokenRefreshIntegration:
                 user_id=f"test-user-{i}",
                 workspace_id=f"test-workspace-{i}",
                 workspace_name=f"Test Workspace {i}",
-                access_token=oauth_manager.crypto_service.encrypt(f"access-token-{i}"),
-                refresh_token=oauth_manager.crypto_service.encrypt(
+                access_token_ciphertext=oauth_manager.crypto.encrypt_token(
+                    f"access-token-{i}"
+                ),
+                refresh_token_ciphertext=oauth_manager.crypto.encrypt_token(
                     f"refresh-token-{i}"
                 ),
                 expires_at=expires_at,
@@ -339,11 +341,11 @@ class TestTokenRefreshIntegration:
             }
 
             # Record initial state
-            initial_access_token = oauth_manager.crypto_service.decrypt(
-                test_connection.access_token
+            initial_access_token = oauth_manager.crypto.decrypt_token(
+                test_connection.access_token_ciphertext
             )
-            initial_refresh_token = oauth_manager.crypto_service.decrypt(
-                test_connection.refresh_token
+            initial_refresh_token = oauth_manager.crypto.decrypt_token(
+                test_connection.refresh_token_ciphertext
             )
             initial_expires_at = test_connection.expires_at
 
@@ -353,11 +355,11 @@ class TestTokenRefreshIntegration:
             )
 
             # Verify tokens were updated
-            new_access_token = oauth_manager.crypto_service.decrypt(
-                refreshed_connection.access_token
+            new_access_token = oauth_manager.crypto.decrypt_token(
+                refreshed_connection.access_token_ciphertext
             )
-            new_refresh_token = oauth_manager.crypto_service.decrypt(
-                refreshed_connection.refresh_token
+            new_refresh_token = oauth_manager.crypto.decrypt_token(
+                refreshed_connection.refresh_token_ciphertext
             )
 
             assert new_access_token == "refreshed-access-token"

@@ -157,6 +157,10 @@ class NotionConnection(Base):
         String(255), nullable=False, doc="Notion workspace ID from OAuth response"
     )
 
+    workspace_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, doc="Human-friendly Notion workspace name"
+    )
+
     bot_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True, doc="Notion bot ID (if present in token response)"
     )

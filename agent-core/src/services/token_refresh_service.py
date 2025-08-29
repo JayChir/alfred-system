@@ -498,7 +498,7 @@ async def get_token_refresh_service() -> TokenRefreshService:
         from ..config import get_settings
 
         settings = get_settings()
-        crypto_service = CryptoService()
+        crypto_service = CryptoService(settings.fernet_key)
         _token_refresh_service = TokenRefreshService(settings, crypto_service)
 
     return _token_refresh_service

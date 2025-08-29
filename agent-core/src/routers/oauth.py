@@ -73,7 +73,7 @@ def get_oauth_manager(settings: Settings = Depends(get_settings)) -> OAuthManage
     Returns:
         OAuth Manager with crypto service
     """
-    crypto_service = CryptoService()
+    crypto_service = CryptoService(settings.fernet_key)
     return OAuthManager(settings, crypto_service)
 
 
