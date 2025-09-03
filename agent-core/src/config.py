@@ -237,6 +237,12 @@ class Settings(BaseSettings):
         default="http://localhost:3002", description="GitHub MCP server URL"
     )
 
+    # ===== Feature Flags =====
+    FEATURE_NOTION_HOSTED_MCP: bool = Field(
+        default=True,
+        description="Enable Notion's hosted MCP service for authenticated users",
+    )
+
     # ===== Cache Configuration =====
     cache_ttl_default: int = Field(
         default=3600, description="Default cache TTL in seconds (1 hour)", ge=0

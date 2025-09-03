@@ -106,8 +106,8 @@ class AgentOrchestrator:
             self.router = await get_mcp_router()
             logger.info("Retrieved MCP router instance")
 
-        # Get healthy toolsets from router
-        toolsets = self._get_healthy_toolsets()
+        # Get healthy toolsets from router (base toolsets for initialization)
+        toolsets = await self._get_healthy_toolsets()
 
         # Create agent with Anthropic model and MCP toolsets
         # Note: Using toolsets= parameter, not tools=
@@ -133,12 +133,15 @@ class AgentOrchestrator:
             toolset_count=len(toolsets),
         )
 
-    def _get_healthy_toolsets(self) -> List[Any]:
+    async def _get_healthy_toolsets(self, user_id: Optional[str] = None) -> List[Any]:
         """
-        Get only healthy MCP servers as toolsets.
+        Get only healthy MCP servers as toolsets, including user-specific ones.
 
         The servers already have process_tool_call hooks for caching
         configured during initialization in the MCP router.
+
+        Args:
+            user_id: Optional user ID for user-specific toolsets (e.g., Notion)
 
         Returns:
             List of healthy MCP server instances with cache support
@@ -146,18 +149,8 @@ class AgentOrchestrator:
         if not self.router:
             return []
 
-        healthy_toolsets = []
-
-        for server_name, server in self.router.servers.items():
-            status = self.router.health_status.get(server_name)
-            if status and status.status == "healthy":
-                # Server already has process_tool_call hook for caching
-                healthy_toolsets.append(server)
-                logger.debug(f"Including healthy server with cache: {server_name}")
-            else:
-                logger.debug(f"Excluding unhealthy server: {server_name}")
-
-        return healthy_toolsets
+        # Use the router's method which handles both base and user-specific toolsets
+        return await self.router.get_toolsets_for_user(user_id)
 
     def _build_system_prompt(self) -> str:
         """
@@ -177,6 +170,7 @@ class AgentOrchestrator:
         self,
         prompt: str,
         session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         stream: bool = False,
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -188,6 +182,7 @@ class AgentOrchestrator:
         Args:
             prompt: User's message
             session_id: Optional session ID for conversation context
+            user_id: Optional user ID for user-specific toolsets (e.g., Notion)
             stream: Enable streaming response
             max_tool_calls: Maximum tool calls allowed
             timeout_seconds: Maximum execution time
@@ -204,6 +199,7 @@ class AgentOrchestrator:
             "Processing chat request",
             request_id=request_id,
             session_id=session_id,
+            user_id=user_id,
             stream=stream,
             max_tool_calls=max_tool_calls,
         )
@@ -212,8 +208,8 @@ class AgentOrchestrator:
             # Get or create session history
             message_history = self.sessions.get(session_id, []) if session_id else []
 
-            # Re-filter toolsets for this specific request (live health check)
-            current_toolsets = self._get_healthy_toolsets()
+            # Re-filter toolsets for this specific request (live health check + user-specific)
+            current_toolsets = await self._get_healthy_toolsets(user_id)
 
             # Apply safety limits - Pydantic AI UsageLimits only supports request_limit and response_tokens_limit
             usage_limits = UsageLimits(
