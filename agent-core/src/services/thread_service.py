@@ -57,7 +57,7 @@ class ThreadService:
         user_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         title: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        thread_metadata: Optional[Dict[str, Any]] = None,
     ) -> Thread:
         """
         Find existing thread or create new one.
@@ -74,7 +74,7 @@ class ThreadService:
             user_id: Owner user ID (uses default for MVP)
             workspace_id: Optional workspace binding
             title: Optional human-readable thread title
-            metadata: Optional metadata dictionary for thread organization
+            thread_metadata: Optional metadata dictionary for thread organization
 
         Returns:
             Thread object (existing or newly created)
@@ -132,7 +132,7 @@ class ThreadService:
                 owner_user_id=UUID(user_id) if user_id else default_user_id,
                 workspace_id=workspace_id,
                 title=title,
-                metadata=metadata,
+                thread_metadata=thread_metadata,
                 last_activity_at=datetime.now(timezone.utc),
             )
             db.add(thread)
@@ -143,7 +143,7 @@ class ThreadService:
                 thread_id=str(thread.id),
                 workspace_id=workspace_id,
                 has_title=bool(title),
-                has_metadata=bool(metadata),
+                has_metadata=bool(thread_metadata),
             )
 
         # Update last activity with timezone-aware datetime

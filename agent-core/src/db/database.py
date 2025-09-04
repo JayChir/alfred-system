@@ -61,16 +61,21 @@ def get_database_url(settings: Settings) -> str:
             "Format: postgresql+psycopg://user:pass@host:port/dbname"
         )
 
+    # Convert PostgresDsn to string
+    database_url_str = str(database_url)
+
     # Convert sync URL to async URL if needed
-    if "postgresql://" in database_url:
-        database_url = database_url.replace("postgresql://", "postgresql+psycopg://")
-    elif not database_url.startswith("postgresql+psycopg://"):
+    if "postgresql://" in database_url_str:
+        database_url_str = database_url_str.replace(
+            "postgresql://", "postgresql+psycopg://"
+        )
+    elif not database_url_str.startswith("postgresql+psycopg://"):
         raise ValueError(
             "DATABASE_URL must use postgresql+psycopg:// driver for async operations. "
             "SQLite is not supported due to PostgreSQL-specific features (CITEXT, advisory locks, etc.)"
         )
 
-    return database_url
+    return database_url_str
 
 
 def get_engine(settings: Optional[Settings] = None) -> AsyncEngine:
@@ -114,14 +119,14 @@ def get_engine(settings: Optional[Settings] = None) -> AsyncEngine:
             echo=settings.log_level == "DEBUG",  # SQL logging in debug mode
             future=True,
             connect_args={
-                # Server settings applied to every connection
-                "server_settings": {
-                    "application_name": f"{settings.app_name}-{settings.app_version}",
-                    "TimeZone": "UTC",  # Force UTC timezone
-                    "lock_timeout": "5000",  # 5 second lock timeout (in ms)
-                    "idle_in_transaction_session_timeout": "15000",  # 15 seconds (in ms)
-                    "statement_timeout": "60000",  # 60 second statement timeout (in ms)
-                },
+                # psycopg3 uses options parameter for server settings
+                "options": (
+                    f"-c application_name={settings.app_name.replace(' ', '_')}-{settings.app_version} "
+                    "-c TimeZone=UTC "
+                    "-c lock_timeout=5000 "  # 5 second lock timeout
+                    "-c idle_in_transaction_session_timeout=15000 "  # 15 seconds
+                    "-c statement_timeout=60000"  # 60 seconds
+                ),
                 # Connection timeout (TCP handshake)
                 "connect_timeout": 5,  # 5 second connection timeout
             },

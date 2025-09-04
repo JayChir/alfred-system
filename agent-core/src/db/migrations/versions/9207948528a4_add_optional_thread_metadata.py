@@ -25,9 +25,9 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Add optional metadata fields to threads and thread_messages tables."""
 
-    # Add title and metadata columns to threads table
+    # Add title and thread_metadata columns to threads table
     op.add_column("threads", sa.Column("title", sa.Text(), nullable=True))
-    op.add_column("threads", sa.Column("metadata", pg.JSONB(), nullable=True))
+    op.add_column("threads", sa.Column("thread_metadata", pg.JSONB(), nullable=True))
 
     # Add request_id column to thread_messages table for debugging
     op.add_column(
@@ -53,5 +53,5 @@ def downgrade() -> None:
     op.drop_column("thread_messages", "request_id")
 
     # Remove columns from threads
-    op.drop_column("threads", "metadata")
+    op.drop_column("threads", "thread_metadata")
     op.drop_column("threads", "title")

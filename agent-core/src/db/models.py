@@ -529,7 +529,7 @@ class Thread(Base):
         Text, nullable=True, doc="Human-readable thread title"
     )
 
-    metadata: Mapped[Optional[dict]] = mapped_column(
+    thread_metadata: Mapped[Optional[dict]] = mapped_column(
         JSONB, nullable=True, doc="Flexible metadata storage for future extensions"
     )
 
