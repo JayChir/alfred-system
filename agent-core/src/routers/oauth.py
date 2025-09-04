@@ -10,7 +10,7 @@ to hosted services (e.g., Notion's hosted MCP at https://mcp.notion.com/mcp).
 
 Security features:
 - CSRF protection with cryptographically secure state tokens
-- User session binding and validation
+- Flow session binding and validation
 - Comprehensive error handling with structured logging
 - Encrypted token storage immediately after exchange
 
@@ -63,7 +63,9 @@ OAUTH_ERROR_MAPPING = {
 }
 
 
-def get_oauth_manager(settings: Settings = Depends(get_settings)) -> OAuthManager:
+def get_oauth_manager(
+    settings: Settings = Depends(get_settings),  # noqa: B008
+) -> OAuthManager:  # noqa: B008
     """
     Dependency to get OAuth Manager instance.
 
@@ -226,8 +228,8 @@ async def connect_notion(
     return_to: Optional[str] = Query(
         None, description="Return URL after successful auth"
     ),
-    db: AsyncSession = Depends(get_db_session),
-    oauth_manager: OAuthManager = Depends(get_oauth_manager),
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+    oauth_manager: OAuthManager = Depends(get_oauth_manager),  # noqa: B008
 ):
     """
     Initiate Notion OAuth flow by redirecting to Notion authorization endpoint.
@@ -239,7 +241,7 @@ async def connect_notion(
     4. Redirects user to Notion for consent
 
     Args:
-        request: FastAPI request object for session access
+        request: FastAPI request object
         return_to: Optional return URL after successful authentication
         db: Database session dependency
         oauth_manager: OAuth manager service dependency
@@ -257,10 +259,8 @@ async def connect_notion(
             return_to=return_to,
         )
 
-        # Extract session information for user binding
-        # In a production app, you'd have actual user/session management here
-        # For now, use a simple session identifier from headers or generate one
-        session_id = request.headers.get("X-Session-ID", f"anon_{request_id}")
+        # Extract flow session identifier for OAuth CSRF binding
+        flow_session_id = request.headers.get("X-Flow-Session-ID", f"flow_{request_id}")
         user_id = None  # TODO: Extract from actual authentication system
 
         # Create OAuth state record with CSRF protection
@@ -268,7 +268,7 @@ async def connect_notion(
             db=db,
             provider="notion",
             user_id=user_id,
-            session_id=session_id,
+            flow_session_id=flow_session_id,
             return_to=return_to,
         )
 
@@ -327,8 +327,8 @@ async def notion_oauth_callback(
     error_description: Optional[str] = Query(
         None, description="Error description from Notion"
     ),
-    db: AsyncSession = Depends(get_db_session),
-    oauth_manager: OAuthManager = Depends(get_oauth_manager),
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+    oauth_manager: OAuthManager = Depends(get_oauth_manager),  # noqa: B008
 ):
     """
     Handle Notion OAuth callback and complete token exchange.
@@ -415,11 +415,14 @@ async def notion_oauth_callback(
             )
 
         # Validate and consume state token
-        session_id = request.headers.get("X-Session-ID", f"anon_{request_id}")
+        flow_session_id = request.headers.get("X-Flow-Session-ID", f"flow_{request_id}")
 
         try:
             oauth_state = await oauth_manager.validate_and_consume_state(
-                db=db, state_token=state, provider="notion", session_id=session_id
+                db=db,
+                state_token=state,
+                provider="notion",
+                flow_session_id=flow_session_id,
             )
         except StateValidationError as e:
             logger.warning(

@@ -359,11 +359,11 @@ class OAuthState(Base):
     OAuth state management for CSRF protection and user binding.
 
     Stores cryptographically secure state tokens with TTL for OAuth flows.
-    Each state is bound to a user session and includes optional return_to URL.
+    Each state is bound to a flow session and includes optional return_to URL.
 
     Security features:
     - Cryptographically random state tokens
-    - User session binding to prevent CSRF attacks
+    - Flow session binding to prevent CSRF attacks
     - TTL expiration (typically 10-15 minutes)
     - One-time use enforcement
 
@@ -371,7 +371,7 @@ class OAuthState(Base):
         id: Unique state identifier (UUID)
         state: Cryptographically random state token
         user_id: Optional user ID for authenticated flows
-        session_id: Session identifier for user binding
+        flow_session_id: Flow session identifier for OAuth CSRF protection
         provider: OAuth provider (notion, github, etc.)
         return_to: Optional return URL after successful auth
         created_at: State creation timestamp
@@ -397,7 +397,7 @@ class OAuthState(Base):
         doc="Cryptographically random state token for CSRF protection",
     )
 
-    # User and session binding
+    # User and flow session binding
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -405,8 +405,10 @@ class OAuthState(Base):
         doc="Optional user ID for authenticated flows",
     )
 
-    session_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True, doc="Session identifier for user binding"
+    flow_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        doc="Flow session identifier for OAuth CSRF protection",
     )
 
     # OAuth provider

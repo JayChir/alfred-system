@@ -161,7 +161,7 @@ flowchart LR
 
 **Cache Service**: Read-through; in-memory first, then Postgres with TTL policies.
 
-**Session Store**: Conversation context + active Notion workspace per session.
+**Device Session Store**: Conversation context + active Notion workspace per device token.
 
 ---
 
@@ -245,7 +245,7 @@ Each week has: **Goals** → **Deliverables** → **Artifacts** → **Acceptance
 - Ops note: psql maintenance, basic vacuum/autovacuum settings
 
 **AC**
-- Multi-request conversation retains context via session token
+- Multi-request conversation retains context via device token
 - Cache hit ratio >70% on repeated reads in a scripted test
 - `meta.tokens.used` increments correctly and shows warnings over threshold
 
@@ -340,13 +340,13 @@ Each week has: **Goals** → **Deliverables** → **Artifacts** → **Acceptance
 
 ## Logging Schema
 
-**Request**: ts, level, request_id, route, method, user_id, session_id
+**Request**: ts, level, request_id, route, method, user_id, device_token, context_id
 
 **Timing**: duration_ms, db_ms, mcp_ms
 
 **Cache**: cache_key, cache_hit, ttl_remaining
 
-**Tokens**: input_tokens, output_tokens, session_tokens_total
+**Tokens**: input_tokens, output_tokens, device_tokens_total
 
 **Outcome**: status, error_code (when applicable)
 
@@ -354,7 +354,7 @@ Each week has: **Goals** → **Deliverables** → **Artifacts** → **Acceptance
 
 ### Detailed Logging & Metrics Fields
 
-**Request**: request_id, route, method, user_id, session_id
+**Request**: request_id, route, method, user_id, device_token, context_id
 
 **Timing**: duration_ms, mcp_attempts, db_time_ms
 

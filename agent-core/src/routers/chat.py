@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from src.config import Settings, get_settings
 from src.services.agent_orchestrator import get_agent_orchestrator
 from src.utils.logging import get_logger
+from src.utils.validation import context_id_adhoc, require_prefix
 
 # Create router for chat endpoints
 router = APIRouter()
@@ -48,10 +49,11 @@ class ChatRequest(BaseModel):
         min_length=1,
         json_schema_extra={"example": [{"role": "user", "content": "Hello!"}]},
     )
-    session: Optional[str] = Field(
+    deviceToken: Optional[str] = Field(
         None,
-        description="Optional session token for conversation continuity",
-        json_schema_extra={"example": "session-123-abc"},
+        description="Optional device token for metering and continuity",
+        pattern="^dtok_.*",
+        json_schema_extra={"example": "dtok_optional-device-token"},
     )
     forceRefresh: bool = Field(
         False,
@@ -65,7 +67,7 @@ class ChatRequest(BaseModel):
                 "messages": [
                     {"role": "user", "content": "What's the weather like today?"}
                 ],
-                "session": "optional-session-token",
+                "deviceToken": "dtok_optional-device-token",
                 "forceRefresh": False,
             }
         }
@@ -185,12 +187,18 @@ async def chat_endpoint(
     # Get request ID from middleware
     request_id = getattr(request.state, "request_id", "unknown")
 
+    # Validate token prefixes at API boundary
+    require_prefix(chat_request.deviceToken, "dtok_", "deviceToken")
+
     # Log chat request details
     logger.info(
         "Chat request received",
         request_id=request_id,
         message_count=len(chat_request.messages),
-        has_session=bool(chat_request.session),
+        has_device_token=bool(chat_request.deviceToken),
+        device_token_prefix=chat_request.deviceToken[:6]
+        if chat_request.deviceToken
+        else None,
         force_refresh=chat_request.forceRefresh,
         stream=stream,
     )
@@ -247,13 +255,11 @@ async def chat_endpoint(
                 detail="No user message found in request",
             )
 
-        # Extract user_id from session or headers (MVP - will be from JWT in production)
-        # For now, we'll check for an X-User-ID header or use session as fallback
+        # Extract user_id from headers (MVP - will be from JWT in production)
         user_id = request.headers.get("X-User-ID")
-        if not user_id and chat_request.session:
-            # In production, decode session JWT to get user_id
-            # For MVP, use session ID as user_id placeholder
-            user_id = chat_request.session
+
+        # Extract workspace_id from headers (MVP - later from device token or thread)
+        workspace_id = request.headers.get("X-Workspace-ID")
 
         # Process through agent orchestrator
         if stream:
@@ -263,8 +269,11 @@ async def chat_endpoint(
                 try:
                     async for event in orchestrator.chat(
                         prompt=prompt,
-                        session_id=chat_request.session,
+                        context_id=context_id_adhoc(
+                            request_id
+                        ),  # Adhoc context for streaming
                         user_id=user_id,
+                        workspace_id=workspace_id,
                         stream=True,
                         force_refresh=chat_request.forceRefresh,
                     ):
@@ -289,10 +298,15 @@ async def chat_endpoint(
 
         else:
             # Non-streaming response
+            # Generate context ID - for MVP use adhoc context
+            # Later this will be ctx:thread:{thread_id} when threads are integrated
+            context_id = context_id_adhoc(request_id)
+
             result = await orchestrator.chat(
                 prompt=prompt,
-                session_id=chat_request.session,
+                context_id=context_id,
                 user_id=user_id,
+                workspace_id=workspace_id,
                 stream=False,
                 force_refresh=chat_request.forceRefresh,
             )
@@ -301,6 +315,8 @@ async def chat_endpoint(
             logger.info(
                 "Chat response generated",
                 request_id=request_id,
+                context_id=context_id,
+                workspace_id=workspace_id,
                 response_length=len(result.reply),
                 tool_count=len(result.meta.get("tool_calls", [])),
                 tokens_input=result.meta.get("usage", {}).get("input_tokens", 0),
@@ -354,7 +370,7 @@ async def chat_endpoint(
 async def chat_stream_endpoint(
     request: Request,
     prompt: str,
-    session: Optional[str] = None,
+    device_token: Optional[str] = None,
     api_key: str = Depends(verify_api_key),
 ) -> StreamingResponse:
     """
@@ -371,7 +387,7 @@ async def chat_stream_endpoint(
 
     Args:
         prompt: User's message/prompt
-        session: Optional session token
+        device_token: Optional device token (dtok_...)
         api_key: Verified API key
 
     Returns:
@@ -384,10 +400,13 @@ async def chat_stream_endpoint(
         # Get the agent orchestrator
         orchestrator = await get_agent_orchestrator()
 
-        # Extract user_id from headers or session
+        # Extract user_id and workspace from headers
         user_id = request.headers.get("X-User-ID")
-        if not user_id and session:
-            user_id = session
+        workspace_id = request.headers.get("X-Workspace-ID")
+
+        # Generate adhoc context for streaming
+        request_id = getattr(request.state, "request_id", "unknown")
+        context_id = context_id_adhoc(request_id)
 
         # Create async generator for SSE
         async def event_generator():
@@ -395,8 +414,9 @@ async def chat_stream_endpoint(
             try:
                 async for event in orchestrator.chat(
                     prompt=prompt,
-                    session_id=session,
+                    context_id=context_id,
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     stream=True,
                 ):
                     # Format as SSE
