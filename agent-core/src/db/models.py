@@ -524,6 +524,15 @@ class Thread(Base):
         Text, nullable=True, doc="Optional workspace for tool routing"
     )
 
+    # Optional metadata for thread organization
+    title: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="Human-readable thread title"
+    )
+
+    metadata: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True, doc="Flexible metadata storage for future extensions"
+    )
+
     # Share token for cross-device access
     share_token_hash: Mapped[Optional[bytes]] = mapped_column(
         LargeBinary,
@@ -623,6 +632,13 @@ class ThreadMessage(Base):
         ForeignKey("threads.id", ondelete="CASCADE"),
         nullable=False,
         doc="Parent thread ID",
+    )
+
+    # Request tracking for debugging
+    request_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        doc="Request ID for tracing and debugging",
     )
 
     # Message content

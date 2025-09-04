@@ -56,6 +56,8 @@ class ThreadService:
         share_token: Optional[str] = None,
         user_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
+        title: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Thread:
         """
         Find existing thread or create new one.
@@ -71,6 +73,8 @@ class ThreadService:
             share_token: Share token for cross-device access
             user_id: Owner user ID (uses default for MVP)
             workspace_id: Optional workspace binding
+            title: Optional human-readable thread title
+            metadata: Optional metadata dictionary for thread organization
 
         Returns:
             Thread object (existing or newly created)
@@ -127,6 +131,8 @@ class ThreadService:
             thread = Thread(
                 owner_user_id=UUID(user_id) if user_id else default_user_id,
                 workspace_id=workspace_id,
+                title=title,
+                metadata=metadata,
                 last_activity_at=datetime.now(timezone.utc),
             )
             db.add(thread)
@@ -136,6 +142,8 @@ class ThreadService:
                 "Created new thread",
                 thread_id=str(thread.id),
                 workspace_id=workspace_id,
+                has_title=bool(title),
+                has_metadata=bool(metadata),
             )
 
         # Update last activity with timezone-aware datetime
@@ -151,6 +159,7 @@ class ThreadService:
         content: Any,
         client_message_id: Optional[str] = None,
         in_reply_to: Optional[UUID] = None,
+        request_id: Optional[UUID] = None,
         status: str = "complete",
         tool_calls: Optional[List[Dict]] = None,
         tokens: Optional[Dict[str, int]] = None,
@@ -165,6 +174,7 @@ class ThreadService:
             content: Message content (string or structured)
             client_message_id: Client-provided ID for idempotency
             in_reply_to: Previous message ID for threading
+            request_id: Request ID for tracing and debugging
             status: Message status (pending/streaming/complete/error)
             tool_calls: Tool calls made in this message
             tokens: Token usage dict with input/output counts
@@ -205,6 +215,7 @@ class ThreadService:
             content=content,
             client_message_id=client_message_id,
             in_reply_to=in_reply_to,
+            request_id=request_id,
             status=status,
             tool_calls=tool_calls,
             tokens_input=tokens.get("input") if tokens else None,
