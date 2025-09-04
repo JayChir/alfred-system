@@ -12,6 +12,7 @@ from typing import Annotated, Any, ClassVar, Dict, List, Optional, Tuple
 
 import structlog
 from pydantic import (
+    AliasChoices,
     AnyHttpUrl,
     BeforeValidator,
     Field,
@@ -123,6 +124,7 @@ class Settings(BaseSettings):
     # ===== Database Configuration (Week 3) =====
     database_url: Optional[PostgresDsn] = Field(
         default=None,
+        validation_alias=AliasChoices("DATABASE_URL", "DB_URL"),
         description="PostgreSQL connection URL (postgresql://user:pass@host:port/db)",
     )
 
