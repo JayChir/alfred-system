@@ -187,7 +187,7 @@ class MCPRouter:
         }
 
         # For MVP Week 1, start with a subset
-        enabled_servers = ["time", "github-personal", "notion"]
+        enabled_servers = ["time", "github-personal", "notion", "atlassian"]
 
         for server_name in enabled_servers:
             if server_name in server_mapping:
