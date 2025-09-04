@@ -4,7 +4,11 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the src directory to Python path so we can import our models
 src_path = Path(__file__).parent.parent.parent
@@ -29,8 +33,12 @@ except ImportError:
     target_metadata = None
 
 # Override sqlalchemy.url with environment variable if available
-database_url = os.getenv("DB_URL")
+# Support both DATABASE_URL (preferred) and DB_URL for compatibility
+database_url = os.getenv("DATABASE_URL") or os.getenv("DB_URL")
 if database_url:
+    # Convert asyncpg URLs to sync for Alembic
+    if "postgresql+asyncpg://" in database_url:
+        database_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
     config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,
@@ -75,7 +83,7 @@ def run_migrations_online() -> None:
 
     if not database_url:
         raise ValueError(
-            "Database URL not found. Set DB_URL environment variable or "
+            "Database URL not found. Set DATABASE_URL or DB_URL environment variable or "
             "sqlalchemy.url in alembic.ini"
         )
 
