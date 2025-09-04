@@ -62,7 +62,7 @@ class AgentOrchestrator:
     - Creates and manages a Pydantic AI agent
     - Loads MCP servers as toolsets
     - Handles chat conversations with streaming support
-    - Manages session history
+    - Manages context history
     - Provides error normalization
     """
 

@@ -66,13 +66,13 @@
 
 **Schema Design** (Production-Ready):
 
-**01_user_sessions.sql**:
+**01_device_sessions.sql**:
 ```sql
-CREATE TABLE IF NOT EXISTS user_sessions (
+CREATE TABLE IF NOT EXISTS device_sessions (
   session_id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id            uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   workspace_id       text,                              -- Notion workspace
-  session_token_hash bytea NOT NULL UNIQUE,             -- sha256(cookie_token)
+  device_token_hash  bytea NOT NULL UNIQUE,             -- sha256(cookie_token)
   context_data       jsonb NOT NULL DEFAULT '{}',
   tokens_input_total bigint NOT NULL DEFAULT 0,         -- handles large token counts
   tokens_output_total bigint NOT NULL DEFAULT 0,
@@ -81,9 +81,9 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   expires_at         timestamptz NOT NULL               -- sliding expiry
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_last_accessed ON user_sessions(last_accessed);
-CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_device_sessions_user ON device_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_device_sessions_last_accessed ON device_sessions(last_accessed);
+CREATE INDEX IF NOT EXISTS idx_device_sessions_expires_at ON device_sessions(expires_at);
 ```
 
 **02_agent_cache.sql**:
@@ -127,38 +127,38 @@ from datetime import datetime, timezone, timedelta
 SLIDING_TTL = timedelta(days=7)
 
 def _hash_token(tok: str) -> bytes:
-    """SHA256 hash of session token for secure storage"""
+    """SHA256 hash of device token for secure storage"""
     return hashlib.sha256(tok.encode()).digest()
 
 async def create_session(db, user_id, workspace_id, cookie_token):
-    """Create or update session with sliding expiry"""
+    """Create or update device session with sliding expiry"""
     now = datetime.now(timezone.utc)
     await db.execute(text("""
-      INSERT INTO user_sessions (session_token_hash, user_id, workspace_id, created_at, last_accessed, expires_at)
+      INSERT INTO device_sessions (device_token_hash, user_id, workspace_id, created_at, last_accessed, expires_at)
       VALUES (:h, :uid, :ws, :now, :now, :exp)
-      ON CONFLICT (session_token_hash) DO UPDATE
+      ON CONFLICT (device_token_hash) DO UPDATE
         SET user_id=EXCLUDED.user_id, workspace_id=EXCLUDED.workspace_id,
             last_accessed=EXCLUDED.last_accessed, expires_at=EXCLUDED.expires_at
     """), {"h": _hash_token(cookie_token), "uid": user_id, "ws": workspace_id,
            "now": now, "exp": now + SLIDING_TTL})
 
 async def resume_session(db, cookie_token):
-    """Resume session and slide expiry window"""
+    """Resume device session and slide expiry window"""
     row = (await db.execute(text("""
-      SELECT session_id, user_id, workspace_id, expires_at FROM user_sessions
-      WHERE session_token_hash=:h AND expires_at > now()
+      SELECT session_id, user_id, workspace_id, expires_at FROM device_sessions
+      WHERE device_token_hash=:h AND expires_at > now()
     """), {"h": _hash_token(cookie_token)})).first()
     if not row: return None
 
     # Slide expiry on every access
     await db.execute(text("""
-      UPDATE user_sessions SET last_accessed=now(), expires_at=now()+(:ttl)::interval
+      UPDATE device_sessions SET last_accessed=now(), expires_at=now()+(:ttl)::interval
       WHERE session_id=:sid
     """), {"sid": row.session_id, "ttl": f"{SLIDING_TTL.total_seconds()} seconds"})
     return row
 ```
 
-**Session Context Strategy**:
+**Device Session Strategy**:
 - **Hash tokens before storage** (bytea in DB, never plaintext)
 - **Sliding expiry** - Every request extends session by 7 days
 - **Workspace binding** - Each session tied to specific Notion workspace
@@ -314,9 +314,9 @@ async def cleanup_expired(session, limit=1000):
   "meta": {
     "cacheHit": true,
     "cacheTtlRemaining": 18360,
-    "tokens": {"input": 150, "output": 200, "session_total": 2500},
+    "tokens": {"input": 150, "output": 200, "device_total": 2500},
     "requestId": "uuid-request-id",
-    "session": "opaque-token"
+    "deviceToken": "dtok_opaque-token"
   }
 }
 ```
@@ -340,7 +340,7 @@ usage = TokenUsage()
 
 # Accumulate into session at request end
 await db.execute(text("""
-  UPDATE user_sessions
+  UPDATE device_sessions
      SET tokens_input_total  = tokens_input_total + :in,
          tokens_output_total = tokens_output_total + :out,
          last_accessed = now()
@@ -351,9 +351,9 @@ await db.execute(text("""
 "meta": {
   "cacheHit": true,
   "cacheTtlRemaining": 3600,
-  "tokens": {"input": 150, "output": 200, "session_total": 2500},
+  "tokens": {"input": 150, "output": 200, "device_total": 2500},
   "requestId": "...",
-  "session": "opaque-token"
+  "deviceToken": "dtok_opaque-token"
 }
 ```
 
@@ -376,11 +376,11 @@ await db.execute(text("""
 **ERD Preview**:
 ```mermaid
 erDiagram
-    users ||--o{ user_sessions : creates
+    users ||--o{ device_sessions : creates
     users ||--o{ notion_connections : has
     users ||--o{ oauth_states : generates
-    user_sessions ||--o{ token_usage_log : tracks
-    user_sessions }o--|| agent_cache : populates
+    device_sessions ||--o{ token_usage_log : tracks
+    device_sessions }o--|| agent_cache : populates
 
     users {
         uuid id PK
@@ -389,9 +389,9 @@ erDiagram
         timestamp last_seen
     }
 
-    user_sessions {
+    device_sessions {
         uuid id PK
-        text session_token_hash UK
+        text device_token_hash UK
         uuid user_id FK
         text workspace_id
         jsonb context_data
@@ -477,14 +477,16 @@ async def test_write_invalidation():
 #### 4. Session Sliding Verification
 ```python
 # Test: Call /chat 3x → last_accessed increases, expires_at slides
-async def test_session_sliding():
+async def test_device_session_sliding():
     session_token = "test-session-123"
 
-    # Make 3 requests with same session
+    # Make 3 requests with same device token
     for i in range(3):
         resp = await client.post("/chat",
-            headers={"X-Session-Token": session_token},
-            json={"messages": [{"role": "user", "content": f"test message {i}"}]}
+            json={
+                "messages": [{"role": "user", "content": f"test message {i}"}],
+                "deviceToken": session_token
+            }
         )
         time.sleep(1)  # Small delay to observe time changes
 
@@ -495,18 +497,20 @@ async def test_session_sliding():
 #### 5. Token Metering Verification
 ```python
 # Test: After 3 calls, tokens_*_total increased; response meta aggregates
-async def test_token_metering():
+async def test_token_metering_device_sessions():
     initial_tokens = 0
     session_token = "metering-test-session"
 
     for i in range(3):
         resp = await client.post("/chat",
-            headers={"X-Session-Token": session_token},
-            json={"messages": [{"role": "user", "content": f"short message {i}"}]}
+            json={
+                "messages": [{"role": "user", "content": f"short message {i}"}],
+                "deviceToken": session_token
+            }
         )
-        current_session_total = resp.json()["meta"]["tokens"]["session_total"]
-        assert current_session_total > initial_tokens
-        initial_tokens = current_session_total
+        current_device_total = resp.json()["meta"]["tokens"].get("device_total", 0)
+        assert current_device_total > initial_tokens
+        initial_tokens = current_device_total
 ```
 
 ### Performance Verification
@@ -551,9 +555,9 @@ pytest tests/ --db=postgresql -v
 ## Success Criteria
 
 ### Functional Requirements
-- [ ] Session tokens provide conversation continuity across requests
+- [ ] Device tokens provide conversation continuity across requests
 - [ ] Cache hit rate consistently >70% on repeated identical queries
-- [ ] Token usage visible in all response metadata with session accumulation
+- [ ] Token usage visible in all response metadata with device accumulation
 - [ ] Notion workspace binding works correctly with existing OAuth flow
 - [ ] Database performance adequate for 50+ concurrent sessions
 
@@ -574,7 +578,7 @@ pytest tests/ --db=postgresql -v
 ## Week 4 Preparation
 
 Phase 3 deliverables enable Week 4 streaming features:
-- **Session Continuity**: SSE reconnection using session tokens
+- **Device Continuity**: SSE reconnection using device tokens
 - **Cache Performance**: Stream responses benefit from aggressive caching
 - **Token Management**: Budget tracking prevents stream cutoffs
 - **Database Infrastructure**: Persistent connections for streaming workloads

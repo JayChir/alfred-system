@@ -309,7 +309,7 @@ from pydantic import BaseModel
 class ChatRequest(BaseModel):
     """Request model for chat endpoint with field validation."""
     messages: list[dict]        # List of conversation messages
-    session: str | None = None  # Optional session token for context
+    deviceToken: str | None = None  # Optional device token (dtok_...) for metering/continuity
     forceRefresh: bool = False  # Flag to bypass cache
 
 # FastAPI router groups related endpoints

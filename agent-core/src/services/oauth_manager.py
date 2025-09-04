@@ -9,7 +9,7 @@ Security features:
 - Cryptographically secure state tokens with CSRF protection
 - HTTP Basic authentication for token exchange
 - Encrypted token storage using MultiFernet
-- User session binding and TTL enforcement
+- Flow session binding and TTL enforcement
 - Comprehensive error handling with structured logging
 
 OAuth Flow:
@@ -122,7 +122,7 @@ class OAuthManager:
     - Secure state management with CSRF protection
     - Encrypted token storage with key rotation
     - Proper error handling and logging
-    - User session binding
+    - Flow session binding
 
     Currently supported providers:
     - Notion (backend OAuth with client credentials)
