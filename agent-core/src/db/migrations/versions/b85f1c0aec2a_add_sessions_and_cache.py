@@ -22,7 +22,7 @@ def upgrade() -> None:
     """Create user_sessions and agent_cache tables with production-ready schema."""
     # Create required PostgreSQL extensions
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")  # for gen_random_uuid()
-    op.execute("CREATE EXTENSION IF NOT EXISTS citext")  # for case-insensitive text
+    # Note: citext extension already created in earlier migration (538147b69810)
 
     # Create user_sessions table
     op.create_table(
@@ -73,7 +73,7 @@ def upgrade() -> None:
 
     # Add data validation constraints for user_sessions
     op.create_check_constraint(
-        "chk_session_hash_len", "user_sessions", "length(session_token_hash) = 32"
+        "chk_session_hash_len", "user_sessions", "octet_length(session_token_hash) = 32"
     )
     op.create_check_constraint(
         "chk_session_exp_future", "user_sessions", "expires_at > created_at"
@@ -101,6 +101,8 @@ def upgrade() -> None:
 
     # Create indexes for agent_cache
     op.create_index("idx_agent_cache_expires", "agent_cache", ["expires_at"])
+    # Note: Partial index for cleanup would require IMMUTABLE function in WHERE clause
+    # For now, use the general expires_at index for cleanup queries
 
     # Add data validation constraints for agent_cache
     op.create_check_constraint(
