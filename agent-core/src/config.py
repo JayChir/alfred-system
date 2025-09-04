@@ -285,6 +285,32 @@ class Settings(BaseSettings):
         # - OAuth operations (security sensitive)
     }
 
+    # ===== Thread Configuration (Issue #51) =====
+    enable_threads: bool = Field(
+        default=True,
+        description="Enable thread support for conversation continuity",
+    )
+
+    thread_message_limit: int = Field(
+        default=100,
+        description="Maximum messages to fetch per thread",
+        ge=1,
+        le=500,
+    )
+
+    share_token_ttl_hours: int = Field(
+        default=168,
+        description="Share token validity in hours (default 1 week)",
+        ge=1,
+        le=720,  # Max 30 days
+    )
+
+    default_user_id: Optional[str] = Field(
+        default="00000000-0000-0000-0000-000000000000",
+        description="Default user UUID for MVP (should be None in production)",
+        pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+
     # ===== Rate Limiting (Week 4) =====
     rate_limit_requests: int = Field(
         default=100, description="Maximum requests per window", ge=1

@@ -8,7 +8,7 @@ Provides idempotency guarantees and partial failure recovery through tool call j
 import hashlib
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -79,9 +79,10 @@ class ThreadService:
         thread = None
 
         if thread_id:
-            # Direct lookup by ID
+            # Direct lookup by ID (coerce string to UUID)
+            thread_uuid = UUID(thread_id) if isinstance(thread_id, str) else thread_id
             stmt = select(Thread).where(
-                and_(Thread.id == thread_id, Thread.deleted_at.is_(None))
+                and_(Thread.id == thread_uuid, Thread.deleted_at.is_(None))
             )
             result = await db.execute(stmt)
             thread = result.scalar_one_or_none()
@@ -126,7 +127,7 @@ class ThreadService:
             thread = Thread(
                 owner_user_id=UUID(user_id) if user_id else default_user_id,
                 workspace_id=workspace_id,
-                last_activity_at=datetime.utcnow(),
+                last_activity_at=datetime.now(timezone.utc),
             )
             db.add(thread)
             await db.flush()  # Get the ID
@@ -137,8 +138,8 @@ class ThreadService:
                 workspace_id=workspace_id,
             )
 
-        # Update last activity
-        thread.last_activity_at = datetime.utcnow()
+        # Update last activity with timezone-aware datetime
+        thread.last_activity_at = datetime.now(timezone.utc)
 
         return thread
 
@@ -284,10 +285,12 @@ class ThreadService:
         token_bytes = secrets.token_urlsafe(32)
         token = f"thr_{token_bytes}"
 
-        # Store hash in database with expiry
+        # Store hash in database with expiry (timezone-aware)
         token_hash = hashlib.sha256(token.encode()).digest()
         thread.share_token_hash = token_hash
-        thread.share_token_expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
+        thread.share_token_expires_at = datetime.now(timezone.utc) + timedelta(
+            hours=ttl_hours
+        )
 
         await db.flush()
 
@@ -395,7 +398,7 @@ class ThreadService:
             error: Error message if failed
         """
         log_entry.status = status
-        log_entry.finished_at = datetime.utcnow()
+        log_entry.finished_at = datetime.now(timezone.utc)
 
         if result_digest:
             log_entry.result_digest = result_digest
@@ -524,7 +527,10 @@ class ThreadService:
         thread = result.scalar_one_or_none()
 
         if thread:
-            thread.deleted_at = datetime.utcnow()
+            # Soft delete and clear share tokens
+            thread.deleted_at = datetime.now(timezone.utc)
+            thread.share_token_hash = None
+            thread.share_token_expires_at = None
             await db.flush()
 
             logger.info("Soft deleted thread", thread_id=str(thread_id))
