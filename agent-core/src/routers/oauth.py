@@ -415,11 +415,14 @@ async def notion_oauth_callback(
             )
 
         # Validate and consume state token
-        session_id = request.headers.get("X-Session-ID", f"anon_{request_id}")
+        flow_session_id = request.headers.get("X-Flow-Session-ID", f"flow_{request_id}")
 
         try:
             oauth_state = await oauth_manager.validate_and_consume_state(
-                db=db, state_token=state, provider="notion", session_id=session_id
+                db=db,
+                state_token=state,
+                provider="notion",
+                flow_session_id=flow_session_id,
             )
         except StateValidationError as e:
             logger.warning(

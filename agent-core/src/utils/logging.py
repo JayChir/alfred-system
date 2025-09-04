@@ -213,7 +213,7 @@ def set_request_context(**kwargs: Any) -> None:
 
     Args:
         **kwargs: Key-value pairs to add to request context
-                 Common fields: request_id, user_id, session_id, method, path
+                 Common fields: request_id, user_id, device_token, thread_id, method, path
 
     Example:
         set_request_context(request_id="123", user_id="456", method="POST", path="/api/chat")

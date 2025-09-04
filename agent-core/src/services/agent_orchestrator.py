@@ -27,8 +27,8 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
 
     prompt: str = Field(..., description="User's message to the agent")
-    session_id: Optional[str] = Field(
-        None, description="Session ID for conversation context"
+    context_id: Optional[str] = Field(
+        None, description="Context ID for conversation history"
     )
     stream: bool = Field(False, description="Enable streaming response")
     max_tool_calls: int = Field(20, description="Maximum number of tool calls allowed")
@@ -86,8 +86,8 @@ class AgentOrchestrator:
         self.settings = settings or get_settings()
         self.agent: Optional[Agent] = None
 
-        # In-memory session storage (MVP - will move to DB in Week 3)
-        self.sessions: Dict[str, List[ModelMessage]] = {}
+        # In-memory context storage (MVP - will move to DB in Week 3)
+        self.contexts: Dict[str, List[ModelMessage]] = {}
 
         # Track active requests for debugging
         self.active_requests: Dict[str, float] = {}
@@ -169,8 +169,9 @@ class AgentOrchestrator:
     async def chat(
         self,
         prompt: str,
-        session_id: Optional[str] = None,
+        context_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
         stream: bool = False,
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -181,8 +182,9 @@ class AgentOrchestrator:
 
         Args:
             prompt: User's message
-            session_id: Optional session ID for conversation context
+            context_id: Optional context ID for conversation history
             user_id: Optional user ID for user-specific toolsets (e.g., Notion)
+            workspace_id: Optional workspace ID for tool routing
             stream: Enable streaming response
             max_tool_calls: Maximum tool calls allowed
             timeout_seconds: Maximum execution time
@@ -198,15 +200,15 @@ class AgentOrchestrator:
         logger.info(
             "Processing chat request",
             request_id=request_id,
-            session_id=session_id,
+            context_id=context_id,
             user_id=user_id,
             stream=stream,
             max_tool_calls=max_tool_calls,
         )
 
         try:
-            # Get or create session history
-            message_history = self.sessions.get(session_id, []) if session_id else []
+            # Get or create context history
+            message_history = self.contexts.get(context_id, []) if context_id else []
 
             # Re-filter toolsets for this specific request (live health check + user-specific)
             current_toolsets = await self._get_healthy_toolsets(user_id)
@@ -225,7 +227,7 @@ class AgentOrchestrator:
                     current_toolsets=current_toolsets,
                     usage_limits=usage_limits,
                     request_id=request_id,
-                    session_id=session_id,
+                    context_id=context_id,
                 )
             else:
                 return await self._sync_chat(
@@ -234,7 +236,7 @@ class AgentOrchestrator:
                     current_toolsets=current_toolsets,
                     usage_limits=usage_limits,
                     request_id=request_id,
-                    session_id=session_id,
+                    context_id=context_id,
                 )
 
         finally:
@@ -248,7 +250,7 @@ class AgentOrchestrator:
         current_toolsets: List[Any],
         usage_limits: UsageLimits,
         request_id: str,
-        session_id: Optional[str],
+        context_id: Optional[str],
     ) -> ChatResponse:
         """
         Process non-streaming chat request.
@@ -279,9 +281,9 @@ class AgentOrchestrator:
                         }
                     )
 
-            # Update session history if session_id provided
-            if session_id:
-                self.sessions[session_id] = list(result.all_messages())
+            # Update context history if context_id provided
+            if context_id:
+                self.contexts[context_id] = list(result.all_messages())
 
             # Get usage information
             usage = result.usage()
@@ -329,7 +331,7 @@ class AgentOrchestrator:
         current_toolsets: List[Any],
         usage_limits: UsageLimits,
         request_id: str,
-        session_id: Optional[str],
+        context_id: Optional[str],
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Process streaming chat request.
@@ -368,9 +370,9 @@ class AgentOrchestrator:
                             request_id=request_id,
                         )
 
-                # Update session history if session_id provided
-                if session_id:
-                    self.sessions[session_id] = list(result.all_messages())
+                # Update context history if context_id provided
+                if context_id:
+                    self.contexts[context_id] = list(result.all_messages())
 
                 # Send final event with usage stats
                 usage = result.usage()
@@ -473,28 +475,28 @@ class AgentOrchestrator:
             "origin": "app",
         }
 
-    def get_session_history(self, session_id: str) -> List[ModelMessage]:
+    def get_context_history(self, context_id: str) -> List[ModelMessage]:
         """
-        Get message history for a session.
+        Get message history for a context.
 
         Args:
-            session_id: Session identifier
+            context_id: Context identifier
 
         Returns:
-            List of messages in the session
+            List of messages in the context
         """
-        return self.sessions.get(session_id, [])
+        return self.contexts.get(context_id, [])
 
-    def clear_session(self, session_id: str) -> None:
+    def clear_context(self, context_id: str) -> None:
         """
-        Clear message history for a session.
+        Clear message history for a context.
 
         Args:
-            session_id: Session identifier
+            context_id: Context identifier
         """
-        if session_id in self.sessions:
-            del self.sessions[session_id]
-            logger.info(f"Cleared session: {session_id}")
+        if context_id in self.contexts:
+            del self.contexts[context_id]
+            logger.info(f"Cleared context: {context_id}")
 
     def get_active_requests(self) -> Dict[str, float]:
         """
@@ -511,8 +513,8 @@ class AgentOrchestrator:
         """
         logger.info("Shutting down agent orchestrator")
 
-        # Clear sessions
-        self.sessions.clear()
+        # Clear contexts
+        self.contexts.clear()
 
         # Clear active requests
         self.active_requests.clear()

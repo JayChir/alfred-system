@@ -405,8 +405,10 @@ class OAuthState(Base):
         doc="Optional user ID for authenticated flows",
     )
 
-    session_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True, doc="Session identifier for user binding"
+    flow_session_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        doc="Flow session identifier for OAuth CSRF protection",
     )
 
     # OAuth provider
