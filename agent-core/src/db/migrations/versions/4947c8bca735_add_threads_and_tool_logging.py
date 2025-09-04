@@ -117,7 +117,7 @@ def upgrade() -> None:
             "status",
             sa.Text(),
             nullable=False,
-            server_default="'complete'",
+            server_default=sa.text("'complete'"),
         ),
         # Tool calls made during this message
         sa.Column(
@@ -204,7 +204,7 @@ def upgrade() -> None:
             "status",
             sa.Text(),
             nullable=False,
-            server_default="'pending'",
+            server_default=sa.text("'pending'"),
         ),
         sa.Column(
             "error",
