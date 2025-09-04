@@ -9,7 +9,7 @@ Security features:
 - Cryptographically secure state tokens with CSRF protection
 - HTTP Basic authentication for token exchange
 - Encrypted token storage using MultiFernet
-- User session binding and TTL enforcement
+- Flow session binding and TTL enforcement
 - Comprehensive error handling with structured logging
 
 OAuth Flow:
@@ -122,7 +122,7 @@ class OAuthManager:
     - Secure state management with CSRF protection
     - Encrypted token storage with key rotation
     - Proper error handling and logging
-    - User session binding
+    - Flow session binding
 
     Currently supported providers:
     - Notion (backend OAuth with client credentials)
@@ -179,7 +179,7 @@ class OAuthManager:
         db: AsyncSession,
         provider: str,
         user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        flow_session_id: Optional[str] = None,
         return_to: Optional[str] = None,
     ) -> OAuthState:
         """
@@ -189,7 +189,7 @@ class OAuthManager:
             db: Database session
             provider: OAuth provider name (e.g., 'notion', 'github')
             user_id: Optional user ID for authenticated flows
-            session_id: Session ID for user binding
+            flow_session_id: Flow session ID for OAuth CSRF protection
             return_to: Optional return URL after successful auth
 
         Returns:
@@ -206,7 +206,7 @@ class OAuthManager:
             state=state_token,
             provider=provider,
             user_id=user_id,
-            session_id=session_id,
+            flow_session_id=flow_session_id,
             return_to=return_to,
             expires_at=expires_at,
         )
@@ -230,7 +230,7 @@ class OAuthManager:
         db: AsyncSession,
         state_token: str,
         provider: str,
-        session_id: Optional[str] = None,
+        flow_session_id: Optional[str] = None,
     ) -> OAuthState:
         """
         Validate OAuth state token and mark as used.
@@ -239,7 +239,7 @@ class OAuthManager:
             db: Database session
             state_token: State token from callback
             provider: Expected OAuth provider
-            session_id: Optional session ID for binding validation
+            flow_session_id: Optional flow session ID for OAuth CSRF validation
 
         Returns:
             Validated OAuthState record
@@ -280,15 +280,15 @@ class OAuthManager:
             )
             raise StateValidationError("State token already used")
 
-        # Validate session binding if provided
-        if session_id and oauth_state.session_id != session_id:
+        # Validate flow session binding if provided
+        if flow_session_id and oauth_state.flow_session_id != flow_session_id:
             logger.warning(
-                "OAuth state session mismatch",
+                "OAuth state flow session mismatch",
                 state_id=str(oauth_state.id),
-                expected_session=session_id,
-                actual_session=oauth_state.session_id,
+                expected_flow_session=flow_session_id,
+                actual_flow_session=oauth_state.flow_session_id,
             )
-            raise StateValidationError("State token session mismatch")
+            raise StateValidationError("State token flow session mismatch")
 
         # Mark as used
         oauth_state.mark_used()

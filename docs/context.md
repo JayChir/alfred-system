@@ -114,8 +114,8 @@ Response metadata must include `cacheHit` and `cacheTtlRemaining`.
 - Minimal consent page.
 
 ### Week 3 — Sessions + PostgreSQL Cache + Token Metering
-- `user_sessions` & `agent_cache` tables; read-through/write-through PG backend; TTL policy map by tool.
-- `meta.tokens.used` counters (request + session), warnings at 80% context capacity.
+- `device_sessions` & `agent_cache` tables; read-through/write-through PG backend; TTL policy map by tool.
+- `meta.tokens.used` counters (request + device), warnings at 80% context capacity.
 
 ### Week 4 — SSE Streaming + Hardening + Docs/Tests
 - `/chat/stream` SSE (events: token, tool_call, tool_result, warning, done; heartbeat q15s; Last-Event-ID reconnect).
@@ -155,7 +155,7 @@ Response metadata must include `cacheHit` and `cacheTtlRemaining`.
 ```json
 {
   "messages":[{"role":"user","content":"..."}],
-  "session":"optional-session-token",
+  "deviceToken":"dtok_optional-device-token",
   "forceRefresh": false
 }
 ```
@@ -188,7 +188,7 @@ Response metadata must include `cacheHit` and `cacheTtlRemaining`.
 - `OAUTH-EXCHANGE-FAIL`, `OAUTH-REFRESH-FAIL`
 
 ### Logging schema (redacted & structured)
-- **Request:** `request_id`, `route`, `method`, `user_id`, `session_id`
+- **Request:** `request_id`, `route`, `method`, `user_id`, `device_token`, `context_id`
 - **Timing:** `duration_ms`, `db_ms`, `mcp_ms`
 - **Cache:** `cache_key`, `cache_hit`, `ttl_remaining`
 - **Tokens:** `input_tokens`, `output_tokens`, `session_tokens_total`

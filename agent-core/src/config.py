@@ -220,7 +220,7 @@ class Settings(BaseSettings):
 
     jwt_secret: Optional[str] = Field(
         default=None,
-        description="JWT secret for session tokens (auto-generated if not provided)",
+        description="JWT secret for device tokens (auto-generated if not provided)",
     )
 
     # ===== MCP Configuration =====
