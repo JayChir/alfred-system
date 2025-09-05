@@ -8,6 +8,7 @@ non-streaming responses.
 
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -21,6 +22,20 @@ from src.services.mcp_router import MCPRouter, get_mcp_router
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class AgentDeps:
+    """Dependencies passed to the agent for thread context and tool journaling."""
+
+    user_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    request_id: Optional[str] = None
+    user_message_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    cache_mode: str = "prefer"  # prefer|refresh|bypass
+    user_scope: str = "global"  # Will be user_id:workspace_id later
+    tool_call_index: int = 0  # Counter for tool calls in this execution
 
 
 class ChatRequest(BaseModel):
@@ -125,6 +140,7 @@ class AgentOrchestrator:
             # Don't set toolsets here - we'll pass them dynamically at run time
             # to allow for live health checks and filtering
             system_prompt=self._build_system_prompt(),
+            deps_type=AgentDeps,  # Define the type of dependencies we'll pass
         )
 
         logger.info(
@@ -176,6 +192,8 @@ class AgentOrchestrator:
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         force_refresh: bool = False,
+        thread_id: Optional[str] = None,
+        user_message_id: Optional[str] = None,
     ) -> Any:
         """
         Process a chat request through the agent.
@@ -219,6 +237,20 @@ class AgentOrchestrator:
                 # Note: timeout_seconds parameter handled at agent level, not in UsageLimits
             )
 
+            # Create dependencies for thread context and tool journaling
+            deps = AgentDeps(
+                user_id=user_id,
+                thread_id=thread_id,
+                request_id=request_id,
+                user_message_id=user_message_id,
+                workspace_id=workspace_id,
+                cache_mode="refresh" if force_refresh else "prefer",
+                user_scope=f"{user_id}:{workspace_id}"
+                if user_id and workspace_id
+                else "global",
+                tool_call_index=0,
+            )
+
             # Process based on streaming preference
             if stream:
                 return self._stream_chat(
@@ -228,6 +260,7 @@ class AgentOrchestrator:
                     usage_limits=usage_limits,
                     request_id=request_id,
                     context_id=context_id,
+                    deps=deps,
                 )
             else:
                 return await self._sync_chat(
@@ -237,6 +270,7 @@ class AgentOrchestrator:
                     usage_limits=usage_limits,
                     request_id=request_id,
                     context_id=context_id,
+                    deps=deps,
                 )
 
         finally:
@@ -251,6 +285,7 @@ class AgentOrchestrator:
         usage_limits: UsageLimits,
         request_id: str,
         context_id: Optional[str],
+        deps: Optional[AgentDeps] = None,
     ) -> ChatResponse:
         """
         Process non-streaming chat request.
@@ -261,12 +296,13 @@ class AgentOrchestrator:
         start_time = time.time()
 
         try:
-            # Run the agent with current toolsets
+            # Run the agent with current toolsets and dependencies
             result = await self.agent.run(
                 prompt,
                 message_history=message_history,
                 toolsets=current_toolsets,  # Override with current healthy toolsets
                 usage_limits=usage_limits,
+                deps=deps,  # Pass thread context for tool journaling
             )
 
             # Extract tool calls from messages
@@ -332,6 +368,7 @@ class AgentOrchestrator:
         usage_limits: UsageLimits,
         request_id: str,
         context_id: Optional[str],
+        deps: Optional[AgentDeps] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Process streaming chat request.
@@ -342,12 +379,13 @@ class AgentOrchestrator:
         start_time = time.time()
 
         try:
-            # Run the agent in streaming mode
+            # Run the agent in streaming mode with dependencies
             async with self.agent.run_stream(
                 prompt,
                 message_history=message_history,
                 toolsets=current_toolsets,
                 usage_limits=usage_limits,
+                deps=deps,  # Pass thread context for tool journaling
             ) as result:
                 # Stream text chunks with debouncing
                 async for chunk in result.stream(debounce_by=0.02):

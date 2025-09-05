@@ -236,7 +236,7 @@ class MCPRouter:
                         ctx, call_tool, name: str, tool_args: Dict[str, Any]
                     ):
                         """
-                        Hook to intercept tool calls and add caching layer.
+                        Hook to intercept tool calls and add caching layer with journaling.
 
                         Based on ProcessToolCallback signature from Pydantic AI:
                         (RunContext, Callable, str, dict) -> Awaitable[result]
@@ -265,6 +265,12 @@ class MCPRouter:
                         user_scope = getattr(deps, "user_scope", "global")
                         user_id = getattr(deps, "user_id", None)
                         cache_mode = getattr(deps, "cache_mode", "prefer")
+
+                        # Get thread context for tool journaling
+                        thread_id = getattr(deps, "thread_id", None)
+                        request_id = getattr(deps, "request_id", None)
+                        user_message_id = getattr(deps, "user_message_id", None)
+                        call_index = getattr(deps, "tool_call_index", 0)
 
                         # Check if tool is cacheable
                         cache_key_tuple = (current_config.name, name)
@@ -321,7 +327,7 @@ class MCPRouter:
                                 result.pop("_cache_ttl_remaining_s", None)
                                 return result
 
-                        # Cache miss or refresh - call the tool
+                        # Cache miss or refresh - call the tool with journaling
                         logger.debug(
                             "Cache miss, calling tool",
                             server=current_config.name,
@@ -329,11 +335,100 @@ class MCPRouter:
                             mode=cache_mode,
                         )
 
+                        # Tool journaling for idempotency and partial failure recovery
+                        tool_log_entry = None
+                        if thread_id and request_id and user_message_id:
+                            # We have thread context - enable journaling
+                            try:
+                                from uuid import UUID
+
+                                from src.db import get_async_session
+                                from src.services.thread_service import ThreadService
+
+                                thread_service = ThreadService()
+
+                                # Log tool call before execution
+                                async with get_async_session() as db:
+                                    tool_log_entry = await thread_service.log_tool_call(
+                                        db=db,
+                                        request_id=request_id,
+                                        thread_id=UUID(thread_id)
+                                        if isinstance(thread_id, str)
+                                        else thread_id,
+                                        message_id=None,  # Will be linked later
+                                        user_message_id=UUID(user_message_id)
+                                        if isinstance(user_message_id, str)
+                                        else user_message_id,
+                                        call_index=call_index,
+                                        tool_name=f"{current_config.name}.{name}",
+                                        args=tool_args,
+                                    )
+                                    await db.commit()
+
+                                    # Check if already executed
+                                    if tool_log_entry.status == "success":
+                                        logger.info(
+                                            "Tool call already executed (idempotent)",
+                                            server=current_config.name,
+                                            tool=name,
+                                            log_id=str(tool_log_entry.id),
+                                        )
+                                        # Return cached result from previous execution
+                                        # For now, we don't store the result, so re-execute
+                                        # In future, could store result_json in tool_log table
+
+                            except Exception as e:
+                                logger.error(
+                                    "Failed to log tool call",
+                                    server=current_config.name,
+                                    tool=name,
+                                    error=str(e),
+                                    exc_info=True,
+                                )
+                                # Continue without journaling rather than fail
+
                         try:
                             result = await call_tool(
                                 name, tool_args
                             )  # Use provided callback
+
+                            # Update tool log on success
+                            if tool_log_entry:
+                                try:
+                                    async with get_async_session() as db:
+                                        await thread_service.update_tool_call_status(
+                                            db=db,
+                                            log_entry=tool_log_entry,
+                                            status="success",
+                                            # Could add result_digest for cache invalidation
+                                        )
+                                        await db.commit()
+                                except Exception as e:
+                                    logger.error(
+                                        "Failed to update tool call status",
+                                        error=str(e),
+                                        exc_info=True,
+                                    )
+
                         except Exception as e:
+                            # Update tool log on failure
+                            if tool_log_entry:
+                                try:
+                                    async with get_async_session() as db:
+                                        await thread_service.update_tool_call_status(
+                                            db=db,
+                                            log_entry=tool_log_entry,
+                                            status="failed",
+                                            error=str(e),
+                                        )
+                                        await db.commit()
+                                except Exception as log_err:
+                                    logger.error(
+                                        "Failed to update tool call failure status",
+                                        error=str(log_err),
+                                        exc_info=True,
+                                    )
+
                             # Check if it's a 401 error from Notion
                             if (
                                 current_config.name == "notion"
@@ -366,6 +461,23 @@ class MCPRouter:
                                         tool=name,
                                     )
                                     result = await call_tool(name, tool_args)
+
+                                    # Update tool log on successful retry
+                                    if tool_log_entry:
+                                        try:
+                                            async with get_async_session() as db:
+                                                await thread_service.update_tool_call_status(
+                                                    db=db,
+                                                    log_entry=tool_log_entry,
+                                                    status="success",
+                                                )
+                                                await db.commit()
+                                        except Exception as log_err:
+                                            logger.error(
+                                                "Failed to update tool call retry status",
+                                                error=str(log_err),
+                                                exc_info=True,
+                                            )
                                 else:
                                     # Can't retry without user context
                                     raise
