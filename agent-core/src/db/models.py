@@ -5,6 +5,8 @@ This module defines SQLAlchemy models for:
 - User management and authentication
 - Notion OAuth connections with encrypted token storage
 - Session and cache management
+- Thread management for cross-device continuity
+- Tool call journaling for partial failure recovery
 
 Security: All OAuth tokens are encrypted at rest using Fernet encryption.
 """
@@ -16,16 +18,19 @@ from typing import Optional
 from sqlalchemy import (
     ARRAY,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     LargeBinary,
     SmallInteger,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, ENUM, UUID
+from sqlalchemy.dialects.postgresql import CITEXT, ENUM, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -477,4 +482,368 @@ class OAuthState(Base):
         return (
             f"<OAuthState(id={self.id}, provider={self.provider}, "
             f"state={self.state[:8]}..., status={status})>"
+        )
+
+
+class Thread(Base):
+    """
+    Conversation thread for cross-device continuity.
+
+    Supports conversation state persistence across devices and sessions.
+    Threads can be accessed via ID or share tokens with TTL.
+
+    Attributes:
+        id: Unique thread identifier
+        owner_user_id: Optional owner (defaults to system user in MVP)
+        workspace_id: Optional workspace binding for tool routing
+        share_token_hash: Hashed share token for cross-device access
+        share_token_expires_at: Share token expiration timestamp
+        created_at: Thread creation timestamp
+        last_activity_at: Last message/activity timestamp
+        deleted_at: Soft delete timestamp (NULL = active)
+    """
+
+    __tablename__ = "threads"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+        doc="Unique thread identifier",
+    )
+
+    # Ownership and workspace binding
+    owner_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,  # Set from env var in code for MVP
+        doc="Thread owner (defaults to system user in MVP)",
+    )
+
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="Optional workspace for tool routing"
+    )
+
+    # Optional metadata for thread organization
+    title: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="Human-readable thread title"
+    )
+
+    thread_metadata: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True, doc="Flexible metadata storage for future extensions"
+    )
+
+    # Share token for cross-device access
+    share_token_hash: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary,
+        nullable=True,
+        unique=True,
+        doc="SHA256 hash of share token for cross-device access",
+    )
+
+    share_token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Share token expiration timestamp",
+    )
+
+    # Activity tracking
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        doc="Thread creation timestamp",
+    )
+
+    last_activity_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, doc="Last message/activity timestamp"
+    )
+
+    # Soft delete
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, doc="Soft delete timestamp"
+    )
+
+    # Relationships
+    messages: Mapped[list["ThreadMessage"]] = relationship(
+        "ThreadMessage",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        doc="All messages in this thread",
+    )
+
+    tool_calls: Mapped[list["ToolCallLog"]] = relationship(
+        "ToolCallLog",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        doc="All tool calls made in this thread",
+    )
+
+    @property
+    def is_active(self) -> bool:
+        """Check if thread is active (not deleted)."""
+        return self.deleted_at is None
+
+    @property
+    def is_share_token_valid(self) -> bool:
+        """Check if share token is still valid."""
+        if not self.share_token_expires_at:
+            return True  # No expiration set
+        return datetime.now(timezone.utc) < self.share_token_expires_at
+
+    def __repr__(self) -> str:
+        return f"<Thread(id={self.id}, workspace={self.workspace_id}, active={self.is_active})>"
+
+
+class ThreadMessage(Base):
+    """
+    Individual message within a thread.
+
+    Stores user, assistant, tool, and system messages with idempotency support.
+    Content is stored as JSONB for flexibility with different message types.
+
+    Attributes:
+        id: Unique message identifier
+        thread_id: Parent thread ID
+        role: Message role (user/assistant/tool/system)
+        content: Message content (JSONB for flexibility)
+        client_message_id: Client-provided ID for idempotency
+        in_reply_to: Previous message ID for threading
+        status: Message status (pending/streaming/complete/error)
+        tool_calls: Tool calls made in this message
+        tokens_input: Input tokens consumed
+        tokens_output: Output tokens generated
+        created_at: Message creation timestamp
+    """
+
+    __tablename__ = "thread_messages"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+        doc="Unique message identifier",
+    )
+
+    # Thread relationship
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("threads.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="Parent thread ID",
+    )
+
+    # Request tracking for debugging
+    request_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        doc="Request ID for tracing and debugging",
+    )
+
+    # Message content
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Message role (user/assistant/tool/system)"
+    )
+
+    content: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, doc="Message content in flexible JSON format"
+    )
+
+    # Idempotency
+    client_message_id: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, index=True, doc="Client-provided ID for idempotency"
+    )
+
+    # Threading
+    in_reply_to: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("thread_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Previous message ID for conversation threading",
+    )
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="complete",
+        doc="Message status (pending/streaming/complete/error)",
+    )
+
+    # Tool calls
+    tool_calls: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True, doc="Tool calls made during this message"
+    )
+
+    # Token tracking
+    tokens_input: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, doc="Input tokens consumed"
+    )
+
+    tokens_output: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, doc="Output tokens generated"
+    )
+
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        doc="Message creation timestamp",
+    )
+
+    # Relationships
+    thread: Mapped["Thread"] = relationship(
+        "Thread", back_populates="messages", doc="Parent thread"
+    )
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'assistant', 'tool', 'system')",
+            name="chk_message_role",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'streaming', 'complete', 'error')",
+            name="chk_message_status",
+        ),
+        # Unique constraint for client_message_id per thread (handled in migration with partial index)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ThreadMessage(id={self.id}, thread_id={self.thread_id}, "
+            f"role={self.role}, status={self.status})>"
+        )
+
+
+class ToolCallLog(Base):
+    """
+    Log of tool calls for idempotency and partial failure recovery.
+
+    Tracks every tool execution attempt, enabling recovery from partial failures
+    where tools succeed but the LLM response fails. Uses idempotency keys to
+    prevent duplicate executions.
+
+    Attributes:
+        id: Unique log entry identifier
+        request_id: Request ID for correlation
+        thread_id: Thread containing this tool call
+        message_id: Message containing this tool call (may be NULL)
+        call_index: Position in tool call sequence
+        idempotency_key: Unique key to prevent duplicate executions
+        tool_name: Name of tool being called
+        args: Tool arguments (JSONB)
+        result_digest: Hash of result for cache invalidation
+        status: Execution status (pending/success/failed)
+        error: Error message if failed
+        started_at: Execution start timestamp
+        finished_at: Execution completion timestamp
+    """
+
+    __tablename__ = "tool_call_log"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+        doc="Unique log entry identifier",
+    )
+
+    # Request correlation
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        doc="Request ID for correlation",
+    )
+
+    # Thread relationship
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        doc="Thread containing this tool call",
+    )
+
+    # Message relationship (may be NULL if LLM fails before creating message)
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("thread_messages.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Message containing this tool call (may be NULL)",
+    )
+
+    # Execution tracking
+    call_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, doc="Position in tool call sequence"
+    )
+
+    idempotency_key: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        unique=True,
+        index=True,
+        doc="Unique key to prevent duplicate executions",
+    )
+
+    tool_name: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Name of tool being called"
+    )
+
+    args: Mapped[dict] = mapped_column(JSONB, nullable=False, doc="Tool arguments")
+
+    # Result tracking
+    result_digest: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="Hash of result for cache invalidation"
+    )
+
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="pending",
+        doc="Execution status (pending/success/failed)",
+    )
+
+    error: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, doc="Error message if failed"
+    )
+
+    # Timing
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        doc="Execution start timestamp",
+    )
+
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, doc="Execution completion timestamp"
+    )
+
+    # Relationships
+    thread: Mapped["Thread"] = relationship(
+        "Thread", back_populates="tool_calls", doc="Parent thread"
+    )
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'success', 'failed')", name="chk_tool_status"
+        ),
+    )
+
+    @property
+    def duration_ms(self) -> Optional[float]:
+        """Calculate execution duration in milliseconds."""
+        if not self.finished_at:
+            return None
+        return (self.finished_at - self.started_at).total_seconds() * 1000
+
+    def __repr__(self) -> str:
+        return (
+            f"<ToolCallLog(id={self.id}, tool={self.tool_name}, "
+            f"status={self.status}, duration_ms={self.duration_ms})>"
         )
