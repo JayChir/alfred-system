@@ -16,10 +16,11 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import Settings, get_settings
+from src.db.database import get_async_session as get_db
 from src.db.models import ThreadMessage
-from src.db.session import get_db
 from src.services.agent_orchestrator import get_agent_orchestrator
-from src.services.device_session_service import DeviceSessionService
+
+# from src.services.device_session_service import DeviceSessionService  # Not needed for MVP
 from src.services.thread_service import ThreadService
 from src.utils.logging import get_logger
 from src.utils.validation import context_id_adhoc, require_prefix
@@ -238,7 +239,7 @@ async def chat_endpoint(
 
     # Initialize services
     thread_service = ThreadService()
-    device_session_service = DeviceSessionService()
+    # device_session_service = DeviceSessionService()  # Not needed for MVP
 
     # Validate token prefixes
     if chat_request.deviceToken:
@@ -265,16 +266,12 @@ async def chat_endpoint(
 
     # Initialize for error handling
     thread = None
-    device_session = None
     orchestrator = None
 
     try:
         # Phase 1: Thread Resolution
-        # Handle device session if provided
-        if chat_request.deviceToken:
-            device_session = await device_session_service.find_or_create_session(
-                db, device_token=chat_request.deviceToken, user_id=user_id
-            )
+        # Handle device session if provided (simplified for MVP)
+        workspace_id = None  # For MVP, we'll get this from thread if available
 
         # Find or create thread (priority: threadToken > threadId > create new)
         if chat_request.threadToken:
@@ -312,7 +309,7 @@ async def chat_endpoint(
             thread = await thread_service.find_or_create_thread(
                 db,
                 user_id=user_id,
-                workspace_id=device_session.workspace_id if device_session else None,
+                workspace_id=workspace_id,
             )
 
         # Phase 2: Idempotency Check
@@ -459,19 +456,13 @@ async def chat_endpoint(
 
         # Phase 5: Determine Effective Workspace
         # Thread workspace takes precedence over device session workspace
-        effective_workspace = thread.workspace_id or (
-            device_session.workspace_id if device_session else None
-        )
+        effective_workspace = thread.workspace_id or (workspace_id)
 
-        if effective_workspace != (
-            device_session.workspace_id if device_session else None
-        ):
+        if effective_workspace != (workspace_id):
             logger.info(
                 "Using thread workspace instead of device workspace",
                 thread_workspace=effective_workspace,
-                device_workspace=device_session.workspace_id
-                if device_session
-                else None,
+                device_workspace=workspace_id,
             )
 
         # Phase 6: Execute with Orchestrator (No TX)
