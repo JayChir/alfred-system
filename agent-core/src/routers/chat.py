@@ -490,9 +490,8 @@ async def chat_endpoint(
                     async for event in orchestrator.chat(
                         prompt=user_message_content,
                         context_id=f"ctx:thread:{thread.id}",
-                        user_id=user_id,
+                        user_id=str(user_id),
                         workspace_id=effective_workspace,
-                        message_history=message_history,
                         thread_id=str(thread.id),
                         user_message_id=str(user_msg.id),
                         stream=True,
@@ -596,9 +595,8 @@ async def chat_endpoint(
                 result = await orchestrator.chat(
                     prompt=user_message_content,
                     context_id=f"ctx:thread:{thread.id}",
-                    user_id=user_id,
+                    user_id=str(user_id),
                     workspace_id=effective_workspace,
-                    message_history=message_history,
                     thread_id=str(thread.id),
                     user_message_id=str(user_msg.id),
                     stream=False,
