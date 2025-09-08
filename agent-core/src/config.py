@@ -265,35 +265,26 @@ class Settings(BaseSettings):
     # ===== Cache Configuration =====
     # Tools that should NEVER be cached (mutations, time-sensitive, auth operations)
     # All other tools will be cached with default TTL unless specified
+    # NOTE: Only include unambiguous mutation/time operations. Avoid generic terms
+    # that might appear in read-only tool names (e.g., "post", "pull", "open")
     CACHE_DENYLIST: ClassVar[Set[str]] = {
         # Time-sensitive operations (any server)
         "get_current_time",
         "convert_time",
         "get_time",
         "now",
-        # Mutation operations (any server) - anything that changes state
+        # Clear mutation operations - specific action verbs only
         "create",
         "update",
         "delete",
-        "patch",
-        "put",
-        "post",
-        "add",
-        "remove",
-        "modify",
-        "set",
-        "clear",
-        "reset",
-        "merge",
-        "fork",
-        "push",
-        "pull",
-        "commit",
+        "patch",  # HTTP PATCH is always mutation
+        "merge",  # Git/PR merge
+        "fork",  # Repository fork
+        "push",  # Git push
+        "commit",  # Git commit
         "rollback",
-        "approve",
-        "reject",
-        "close",
-        "open",
+        "approve",  # PR/workflow approval
+        "reject",  # PR/workflow rejection
         "archive",
         "unarchive",
         "assign",

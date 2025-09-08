@@ -351,8 +351,6 @@ class MCPRouter:
                             return await call_tool(name, tool_args)
 
                         # Generate cache key
-                        from src.services.cache_service import make_cache_key
-
                         key = make_cache_key(
                             server=current_config.name,
                             tool=name,

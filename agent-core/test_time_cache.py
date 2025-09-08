@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test cache functionality with time MCP (faster than Notion).
+Verify that time MCP responses are NOT cached (time-sensitive).
 """
 
 import asyncio
@@ -52,8 +52,8 @@ async def test_time_cache():
             # Wait a moment
             await asyncio.sleep(1)
 
-            # Second call (should be cache hit)
-            print("\n   Second call (expect cache hit):")
+            # Second call (should still be cache miss - time is denylisted)
+            print("\n   Second call (expect cache miss - time is denylisted):")
             start = time.time()
             response2 = await client.post(f"{BASE_URL}/api/v1/chat", json=request_data)
             second_duration = time.time() - start
@@ -62,13 +62,13 @@ async def test_time_cache():
                 result2 = response2.json()
                 cache_hit2 = result2.get("meta", {}).get("cacheHit", False)
                 print(f"   ✓ Response received in {second_duration:.2f}s")
-                print(f"   Cache hit: {cache_hit2} (expected: True)")
+                print(f"   Cache hit: {cache_hit2} (expected: False)")
                 print(f"   Reply preview: {result2.get('reply', '')[:100]}...")
 
-                # Check if second call was faster
-                if second_duration < first_duration:
+                # Both calls should have similar duration (no caching)
+                if abs(second_duration - first_duration) < 0.5:
                     print(
-                        f"\n   ✓ Second call was {(first_duration - second_duration):.2f}s faster!"
+                        "\n   ✓ Both calls took similar time (no caching as expected)"
                     )
 
                 # Verify cache metadata
@@ -76,7 +76,7 @@ async def test_time_cache():
                 if ttl:
                     print(f"   Cache TTL remaining: {ttl}s")
 
-                return cache_hit2  # Should be True
+                return not cache_hit2  # Should be False => test passes
             else:
                 print(f"   ❌ Error: {response2.status_code} - {response2.text}")
                 return False
@@ -112,9 +112,9 @@ async def main():
         cache_worked = await test_time_cache()
 
         if cache_worked:
-            print("\n✅ Cache test PASSED! Cache is working correctly.")
+            print("\n✅ Test PASSED! Time operations are correctly NOT cached.")
         else:
-            print("\n❌ Cache test FAILED! Check logs for details.")
+            print("\n❌ Test FAILED! Time operations should not be cached.")
     except Exception as e:
         print(f"\n   ❌ Test failed with error: {e}")
         import traceback

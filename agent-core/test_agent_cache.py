@@ -40,8 +40,8 @@ async def test_cache_with_agent():
             print("   Make sure server is running: uv run python -m src.app")
             return
 
-        # Test 1: Time tool (should always cache since it's deterministic)
-        print("\n2. Testing cache with time tool...")
+        # Test 1: Time tool (should NOT cache - time-sensitive operations are denylisted)
+        print("\n2. Testing cache with time tool (should NOT cache)...")
 
         # First call - should be a cache miss
         print("\n   First call (expect cache miss):")
@@ -67,8 +67,8 @@ async def test_cache_with_agent():
             print(f"   ❌ Error: {response1.status_code} - {response1.text}")
             return
 
-        # Second call - should be a cache hit
-        print("\n   Second call (expect cache hit):")
+        # Second call - should still be a cache miss (time is denylisted)
+        print("\n   Second call (expect cache miss - time is denylisted):")
         start_time = time.time()
         response2 = await client.post(
             f"{base_url}/chat",
