@@ -347,7 +347,7 @@ class PostgreSQLInvokeCache:
                         expires_at, created_at, updated_at, last_accessed, size_bytes
                     )
                     VALUES (
-                        :key, :content::jsonb, :hash, true,
+                        :key, CAST(:content AS jsonb), :hash, true,
                         :expires_at, NOW(), NOW(), NOW(), :size
                     )
                     ON CONFLICT (cache_key) DO UPDATE SET
@@ -459,7 +459,7 @@ class PostgreSQLInvokeCache:
                     WHERE cache_key IN (
                         SELECT DISTINCT cache_key
                         FROM agent_cache_tags
-                        WHERE tag = ANY(:tags::text[])
+                        WHERE tag = ANY(CAST(:tags AS text[]))
                     )
                 """
                 ),
@@ -495,12 +495,15 @@ class PostgreSQLInvokeCache:
         Returns:
             Tuple of (result, was_cached)
         """
-        # Generate 64-bit lock key from cache key
-        lock_key = int(hashlib.sha1(cache_key.encode()).hexdigest()[:16], 16)
+        # Generate 64-bit lock key from cache key (signed int64 for PostgreSQL)
+        # PostgreSQL advisory locks use signed int64, so we need to ensure it fits
+        hash_val = int(hashlib.sha1(cache_key.encode()).hexdigest()[:16], 16)
+        # Convert to signed int64 range (-9223372036854775808 to 9223372036854775807)
+        lock_key = hash_val if hash_val < 2**63 else hash_val - 2**64
 
-        # Ensure transaction scope for advisory lock
-        async with self.db.begin():
-            # Acquire advisory lock (transaction-scoped)
+        # Check if we're already in a transaction
+        if self.db.in_transaction():
+            # Already in transaction, just acquire lock
             await self.db.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
             )
@@ -513,7 +516,23 @@ class PostgreSQLInvokeCache:
             # Cache miss - fill it
             result = await fill_fn()
             return result, False
-            # Lock automatically released at transaction end
+        else:
+            # Need to start a transaction for the lock
+            async with self.db.begin():
+                # Acquire advisory lock (transaction-scoped)
+                await self.db.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+                )
+
+                # Re-check cache under lock
+                cached = await self.get(cache_key)
+                if cached:
+                    return cached, True
+
+                # Cache miss - fill it
+                result = await fill_fn()
+                return result, False
+                # Lock automatically released at transaction end
 
     def stats(self) -> Dict[str, Any]:
         """
