@@ -17,6 +17,7 @@ from typing import Optional
 
 from sqlalchemy import (
     ARRAY,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -203,21 +204,21 @@ class DeviceSession(Base):
 
     # Usage tracking and metering
     tokens_input_total: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,
         server_default="0",
         nullable=False,
         doc="Total input tokens consumed",
     )
 
     tokens_output_total: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,
         server_default="0",
         nullable=False,
         doc="Total output tokens generated",
     )
 
     request_count: Mapped[int] = mapped_column(
-        Integer,
+        BigInteger,
         server_default="0",
         nullable=False,
         doc="Number of requests made with this session",
@@ -982,3 +983,179 @@ class ToolCallLog(Base):
             f"<ToolCallLog(id={self.id}, tool={self.tool_name}, "
             f"status={self.status}, duration_ms={self.duration_ms})>"
         )
+
+
+class AgentCache(Base):
+    """
+    PostgreSQL-backed cache for MCP tool invocations.
+
+    Provides persistent caching with:
+    - Atomic hit counting and access tracking
+    - Per-entry TTL with configurable policies
+    - Tag-based invalidation for related entries
+    - Size limits and content hashing for integrity
+    - Stale-if-error fallback capability
+
+    Cache keys follow the format: {namespace}:{tool}:{version}:{args_hash}
+    where namespace provides tenant/workspace isolation.
+    """
+
+    __tablename__ = "agent_cache"
+
+    # Primary key - deterministic cache key
+    cache_key: Mapped[str] = mapped_column(
+        Text,
+        primary_key=True,
+        doc="Deterministic cache key format: namespace:tool:version:args_hash",
+    )
+
+    # Cached content as JSONB for flexibility
+    content: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        doc="Cached MCP tool response content",
+    )
+
+    # Content verification and metadata
+    content_hash: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="SHA-256 hash of content for integrity verification",
+    )
+
+    idempotent: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=text("true"),
+        nullable=False,
+        doc="Whether this tool result is idempotent (safe to cache)",
+    )
+
+    # TTL and expiry management
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,  # Index for cleanup queries
+        doc="Absolute expiry timestamp for this cache entry",
+    )
+
+    # Usage metrics
+    hit_count: Mapped[int] = mapped_column(
+        Integer,
+        server_default="0",
+        nullable=False,
+        doc="Number of cache hits for this entry",
+    )
+
+    size_bytes: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        doc="Size of cached content in bytes",
+    )
+
+    # Timestamps for tracking and debugging
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        doc="Entry creation timestamp",
+    )
+
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        onupdate=func.now(),
+        nullable=True,
+        doc="Last update timestamp",
+    )
+
+    last_accessed: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Last access timestamp for LRU policies",
+    )
+
+    # Relationships
+    tags: Mapped[list["AgentCacheTag"]] = relationship(
+        "AgentCacheTag",
+        back_populates="cache_entry",
+        cascade="all, delete-orphan",
+        doc="Tags for invalidation grouping",
+    )
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint(
+            "expires_at > created_at",
+            name="chk_cache_exp_future",
+        ),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes > 0",
+            name="chk_cache_size_positive",
+        ),
+        # Partial index for active entries (PostgreSQL-specific)
+        Index(
+            "idx_agent_cache_active",
+            "expires_at",
+            postgresql_where=text("expires_at > NOW()"),
+        ),
+    )
+
+    @property
+    def ttl_remaining_seconds(self) -> float:
+        """Calculate remaining TTL in seconds."""
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        remaining = (self.expires_at - now).total_seconds()
+        return max(0, remaining)
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if entry has expired."""
+        from datetime import timezone
+
+        return datetime.now(timezone.utc) > self.expires_at
+
+    def __repr__(self) -> str:
+        return (
+            f"<AgentCache(key={self.cache_key[:50]}..., "
+            f"hits={self.hit_count}, ttl_remaining={self.ttl_remaining_seconds:.0f}s)>"
+        )
+
+
+class AgentCacheTag(Base):
+    """
+    Tag index for cache invalidation.
+
+    Enables efficient invalidation of related cache entries by tag,
+    such as all entries for a specific Notion page or GitHub repository.
+    Tags follow the format: provider:entity_type:entity_id
+    """
+
+    __tablename__ = "agent_cache_tags"
+
+    # Composite primary key
+    cache_key: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("agent_cache.cache_key", ondelete="CASCADE"),
+        primary_key=True,
+        doc="Reference to cache entry",
+    )
+
+    tag: Mapped[str] = mapped_column(
+        Text,
+        primary_key=True,
+        doc="Tag for grouping (e.g., notion:page:PAGE_ID)",
+    )
+
+    # Relationship
+    cache_entry: Mapped["AgentCache"] = relationship(
+        "AgentCache",
+        back_populates="tags",
+        doc="Parent cache entry",
+    )
+
+    # Indexes
+    __table_args__ = (Index("idx_agent_cache_tags_tag", "tag"),)
+
+    def __repr__(self) -> str:
+        return f"<AgentCacheTag(key={self.cache_key[:30]}..., tag={self.tag})>"
