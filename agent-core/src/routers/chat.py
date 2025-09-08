@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import Settings, get_settings
 from src.db.database import get_async_session as get_db
 from src.db.models import ThreadMessage
+from src.middleware.device_session import OptionalDeviceSession
 from src.services.agent_orchestrator import get_agent_orchestrator
-
-# from src.services.device_session_service import DeviceSessionService  # Not needed for MVP
+from src.services.device_session_service import DeviceSessionService
 from src.services.thread_service import ThreadService
+from src.services.workspace_resolver import WorkspaceResolver
 from src.utils.logging import get_logger
 from src.utils.validation import context_id_adhoc, require_prefix
 
@@ -207,9 +208,10 @@ async def verify_api_key(
 async def chat_endpoint(
     request: Request,
     chat_request: ChatRequest,
+    device_session: OptionalDeviceSession,  # Optional device session context
+    stream: bool = False,  # Query parameter to enable streaming
     api_key: str = Depends(verify_api_key),
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    stream: bool = False,  # Query parameter to enable streaming
 ) -> Any:
     """
     Main chat endpoint for AI agent interaction with thread support.
@@ -239,7 +241,8 @@ async def chat_endpoint(
 
     # Initialize services
     thread_service = ThreadService()
-    # device_session_service = DeviceSessionService()  # Not needed for MVP
+    device_session_service = DeviceSessionService()
+    workspace_resolver = WorkspaceResolver(thread_service)
 
     # Validate token prefixes
     if chat_request.deviceToken:
@@ -247,8 +250,23 @@ async def chat_endpoint(
     if chat_request.threadToken:
         require_prefix(chat_request.threadToken, "thr_", "threadToken")
 
-    # Extract user_id from headers (MVP - will be from JWT in production)
-    user_id = request.headers.get("X-User-ID")
+    # Extract user_id and workspace from device session if available
+    user_id = None
+    device_workspace = None
+
+    if device_session:
+        # Use device session for user identification and workspace
+        user_id = str(device_session.user_id)
+        device_workspace = device_session.workspace_id
+        logger.debug(
+            "Using device session context",
+            session_id=str(device_session.session_id),
+            user_id=user_id,
+            workspace_id=device_workspace,
+        )
+    else:
+        # Fallback to header-based user ID (MVP)
+        user_id = request.headers.get("X-User-ID")
 
     # Log chat request with thread info
     logger.info(
@@ -270,8 +288,8 @@ async def chat_endpoint(
 
     try:
         # Phase 1: Thread Resolution
-        # Handle device session if provided (simplified for MVP)
-        workspace_id = None  # For MVP, we'll get this from thread if available
+        # Initial workspace from device session
+        workspace_id = device_workspace
 
         # Find or create thread (priority: threadToken > threadId > create new)
         if chat_request.threadToken:
@@ -455,14 +473,22 @@ async def chat_endpoint(
                 message_history.append({"role": hist_msg.role, "content": content})
 
         # Phase 5: Determine Effective Workspace
-        # Thread workspace takes precedence over device session workspace
-        effective_workspace = thread.workspace_id or (workspace_id)
+        # Use workspace resolver for proper precedence handling
+        workspace_context = await workspace_resolver.resolve_workspace(
+            db,
+            thread_id=thread.id if thread else None,
+            device_workspace=device_workspace,
+        )
+        effective_workspace = workspace_context.effective_workspace
 
-        if effective_workspace != (workspace_id):
+        if (
+            workspace_context.thread_workspace
+            and workspace_context.thread_workspace != device_workspace
+        ):
             logger.info(
                 "Using thread workspace instead of device workspace",
-                thread_workspace=effective_workspace,
-                device_workspace=workspace_id,
+                thread_workspace=workspace_context.thread_workspace,
+                device_workspace=device_workspace,
             )
 
         # Phase 6: Execute with Orchestrator (No TX)
@@ -515,6 +541,28 @@ async def chat_endpoint(
                         tokens=tokens_used,
                     )
                     await db.commit()
+
+                    # Update device session token usage if available
+                    if device_session and tokens_used:
+                        try:
+                            await device_session_service.update_token_usage(
+                                db,
+                                session_id=device_session.session_id,
+                                tokens_input=tokens_used.get("input", 0),
+                                tokens_output=tokens_used.get("output", 0),
+                            )
+                            logger.debug(
+                                "Updated device session token usage (streaming)",
+                                session_id=str(device_session.session_id),
+                                tokens_input=tokens_used.get("input", 0),
+                                tokens_output=tokens_used.get("output", 0),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to update device session token usage (streaming)",
+                                session_id=str(device_session.session_id),
+                                error=str(e),
+                            )
 
                     # Send final event with share token if requested
                     final_event = {
@@ -613,6 +661,32 @@ async def chat_endpoint(
                 # Commit assistant message
                 await db.commit()
 
+                # Update device session token usage if available
+                if device_session:
+                    tokens_input = result.meta.get("usage", {}).get("input_tokens", 0)
+                    tokens_output = result.meta.get("usage", {}).get("output_tokens", 0)
+
+                    try:
+                        await device_session_service.update_token_usage(
+                            db,
+                            session_id=device_session.session_id,
+                            tokens_input=tokens_input,
+                            tokens_output=tokens_output,
+                        )
+                        logger.debug(
+                            "Updated device session token usage",
+                            session_id=str(device_session.session_id),
+                            tokens_input=tokens_input,
+                            tokens_output=tokens_output,
+                        )
+                    except Exception as e:
+                        # Don't fail the request if token metering fails
+                        logger.warning(
+                            "Failed to update device session token usage",
+                            session_id=str(device_session.session_id),
+                            error=str(e),
+                        )
+
                 logger.info(
                     "Assistant response saved",
                     thread_id=str(thread.id),
@@ -620,6 +694,9 @@ async def chat_endpoint(
                     tokens_input=assistant_msg.tokens_input,
                     tokens_output=assistant_msg.tokens_output,
                     tool_count=len(result.meta.get("tool_calls", [])),
+                    device_session_id=str(device_session.session_id)
+                    if device_session
+                    else None,
                 )
 
                 # Phase 8: Handle Share Token

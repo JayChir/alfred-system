@@ -102,8 +102,143 @@ class User(Base):
         doc="All Notion OAuth connections for this user",
     )
 
+    device_sessions: Mapped[list["DeviceSession"]] = relationship(
+        "DeviceSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        doc="All device sessions for this user",
+    )
+
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, status={self.status})>"
+
+
+class DeviceSession(Base):
+    """
+    Device session model for transport continuity and token metering.
+
+    Stores device tokens (dtok_xxx) for request authentication, workspace binding,
+    and usage tracking. Provides atomic operations for race-safe token validation
+    and sliding window expiry with hard caps.
+
+    Attributes:
+        session_id: Unique session identifier (UUID)
+        user_id: Owner user ID (foreign key to users.id)
+        workspace_id: Active workspace for MCP routing (optional)
+        device_token_hash: SHA-256 hash of device token (32 bytes)
+        created_at: Session creation timestamp
+        last_accessed: Last request timestamp (for sliding expiry)
+        expires_at: Current expiry time (sliding 7-day window)
+        hard_expires_at: Absolute expiry cap (30-day maximum)
+        tokens_input_total: Total input tokens consumed
+        tokens_output_total: Total output tokens generated
+        request_count: Number of requests made with this session
+        revoked_at: Revocation timestamp (soft delete)
+    """
+
+    __tablename__ = "device_sessions"
+
+    # Primary key
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+        doc="Unique device session identifier",
+    )
+
+    # Foreign key to users table
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        doc="Owner user ID",
+    )
+
+    # Workspace binding for MCP routing
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Active workspace for MCP tool routing",
+    )
+
+    # Secure token storage (SHA-256 hash only)
+    device_token_hash: Mapped[bytes] = mapped_column(
+        "session_token_hash",  # Actual column name in database
+        LargeBinary(32),  # Exactly SHA-256 size
+        unique=True,
+        nullable=False,
+        doc="SHA-256 hash of device token (dtok_xxx)",
+    )
+
+    # Timestamp fields with proper indexing
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        nullable=False,
+        doc="Session creation timestamp",
+    )
+
+    last_accessed: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        nullable=False,
+        index=True,  # For cleanup and sliding expiry queries
+        doc="Last request timestamp",
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,  # For validation queries
+        doc="Current expiry time (sliding 7-day window)",
+    )
+
+    hard_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,  # For cleanup queries
+        doc="Absolute expiry cap (30-day maximum)",
+    )
+
+    # Usage tracking and metering
+    tokens_input_total: Mapped[int] = mapped_column(
+        Integer,
+        server_default="0",
+        nullable=False,
+        doc="Total input tokens consumed",
+    )
+
+    tokens_output_total: Mapped[int] = mapped_column(
+        Integer,
+        server_default="0",
+        nullable=False,
+        doc="Total output tokens generated",
+    )
+
+    request_count: Mapped[int] = mapped_column(
+        Integer,
+        server_default="0",
+        nullable=False,
+        doc="Number of requests made with this session",
+    )
+
+    # Soft deletion capability
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Revocation timestamp (soft delete)",
+    )
+
+    # Relationships
+    user: Mapped["User"] = relationship(
+        "User",
+        back_populates="device_sessions",
+        doc="User who owns this device session",
+    )
+
+    def __repr__(self) -> str:
+        return f"<DeviceSession(id={self.session_id}, user_id={self.user_id}, workspace={self.workspace_id})>"
 
 
 class NotionConnection(Base):
