@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Settings, get_settings
 from src.middleware.logging import LoggingMiddleware, PerformanceLoggingMiddleware
-from src.routers import chat, health
+from src.routers import chat, device, health
 from src.utils.logging import configure_logging, get_logger
 
 
@@ -336,6 +336,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
 # Include routers
 app.include_router(health.router, tags=["health"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+app.include_router(device.router, prefix="/api/v1", tags=["device"])
 
 
 # Root endpoint for basic info

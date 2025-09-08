@@ -48,7 +48,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B"]  # Removed "N" to allow camelCase for API compatibility
-ignore = ["E501"]  # Line too long (handled by black)
+ignore = ["E501", "B008"]  # E501: Line too long (handled by black), B008: Allow Depends() in FastAPI
 
 [tool.black]
 line-length = 88
