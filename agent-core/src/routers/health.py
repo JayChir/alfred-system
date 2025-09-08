@@ -576,3 +576,219 @@ async def token_refresh_service_health() -> Dict[str, Any]:
             "configuration": {},
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
+
+
+@router.get(
+    "/healthz/device-sessions",
+    response_model=Dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    summary="Device sessions health",
+    description="Returns health status and metrics for device session management system",
+    response_description="Device session system health and usage metrics",
+)
+async def device_sessions_health() -> Dict[str, Any]:
+    """
+    Device sessions health check endpoint for Issue #23.
+
+    Shows comprehensive health status of the device session management system:
+    - Active session counts and distribution
+    - Token usage metrics for metering
+    - Session expiry and cleanup statistics
+    - Workspace binding distribution
+
+    Returns:
+        Dict containing device session health summary and metrics
+
+    Example response:
+        {
+            "status": "healthy",
+            "session_metrics": {
+                "total_active": 45,
+                "expiring_soon": 5,
+                "recently_accessed": 32,
+                "idle_sessions": 13
+            },
+            "usage_metrics": {
+                "total_tokens_input": 125000,
+                "total_tokens_output": 85000,
+                "avg_tokens_per_session": 4666,
+                "high_usage_sessions": 3
+            },
+            "workspace_distribution": {
+                "with_workspace": 28,
+                "without_workspace": 17,
+                "unique_workspaces": 8
+            },
+            "expiry_stats": {
+                "expiring_1h": 2,
+                "expiring_24h": 12,
+                "expired_awaiting_cleanup": 3
+            }
+        }
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func, select
+
+    from src.db.database import get_async_session as get_db
+    from src.db.models import DeviceSession
+
+    try:
+        async with get_db() as db:
+            now = datetime.now(timezone.utc)
+
+            # Get total active sessions
+            active_sessions = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+            )
+            total_active = active_sessions.scalar() or 0
+
+            # Get sessions expiring soon (within 1 hour)
+            expiring_soon = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+                .where(DeviceSession.expires_at <= now + timedelta(hours=1))
+            )
+            expiring_1h = expiring_soon.scalar() or 0
+
+            # Get sessions expiring within 24 hours
+            expiring_24h_result = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+                .where(DeviceSession.expires_at <= now + timedelta(hours=24))
+            )
+            expiring_24h = expiring_24h_result.scalar() or 0
+
+            # Get recently accessed sessions (within last hour)
+            recently_accessed = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+                .where(DeviceSession.last_accessed >= now - timedelta(hours=1))
+            )
+            recent_count = recently_accessed.scalar() or 0
+
+            # Get idle sessions (not accessed in last 24 hours)
+            idle_sessions = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+                .where(DeviceSession.last_accessed < now - timedelta(hours=24))
+            )
+            idle_count = idle_sessions.scalar() or 0
+
+            # Get token usage metrics
+            token_stats = await db.execute(
+                select(
+                    func.sum(DeviceSession.tokens_input).label("total_input"),
+                    func.sum(DeviceSession.tokens_output).label("total_output"),
+                    func.avg(
+                        DeviceSession.tokens_input + DeviceSession.tokens_output
+                    ).label("avg_total"),
+                    func.count(DeviceSession.session_id)
+                    .filter(
+                        (DeviceSession.tokens_input + DeviceSession.tokens_output)
+                        > 10000
+                    )
+                    .label("high_usage"),
+                )
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+            )
+            token_row = token_stats.one()
+
+            # Get workspace distribution
+            workspace_stats = await db.execute(
+                select(
+                    func.count(DeviceSession.session_id)
+                    .filter(DeviceSession.workspace_id.isnot(None))
+                    .label("with_workspace"),
+                    func.count(DeviceSession.session_id)
+                    .filter(DeviceSession.workspace_id.is_(None))
+                    .label("without_workspace"),
+                    func.count(func.distinct(DeviceSession.workspace_id)).label(
+                        "unique_workspaces"
+                    ),
+                )
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at > now)
+            )
+            workspace_row = workspace_stats.one()
+
+            # Get expired sessions awaiting cleanup
+            expired_sessions = await db.execute(
+                select(func.count(DeviceSession.session_id))
+                .where(DeviceSession.revoked_at.is_(None))
+                .where(DeviceSession.expires_at <= now)
+            )
+            expired_count = expired_sessions.scalar() or 0
+
+            # Determine health status
+            health_status = "healthy"
+            if total_active == 0:
+                health_status = "idle"
+            elif expired_count > 10:
+                health_status = "degraded"  # Too many expired sessions not cleaned up
+            elif expiring_1h > total_active * 0.2:
+                health_status = "warning"  # Many sessions expiring soon
+
+            return {
+                "status": health_status,
+                "session_metrics": {
+                    "total_active": total_active,
+                    "expiring_soon": expiring_1h,
+                    "recently_accessed": recent_count,
+                    "idle_sessions": idle_count,
+                },
+                "usage_metrics": {
+                    "total_tokens_input": token_row.total_input or 0,
+                    "total_tokens_output": token_row.total_output or 0,
+                    "avg_tokens_per_session": round(token_row.avg_total or 0, 2),
+                    "high_usage_sessions": token_row.high_usage or 0,
+                },
+                "workspace_distribution": {
+                    "with_workspace": workspace_row.with_workspace or 0,
+                    "without_workspace": workspace_row.without_workspace or 0,
+                    "unique_workspaces": workspace_row.unique_workspaces or 0,
+                },
+                "expiry_stats": {
+                    "expiring_1h": expiring_1h,
+                    "expiring_24h": expiring_24h,
+                    "expired_awaiting_cleanup": expired_count,
+                },
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+
+    except Exception as e:
+        logger.error("Failed to get device sessions health", error=str(e))
+        return {
+            "status": "error",
+            "error": str(e),
+            "session_metrics": {
+                "total_active": 0,
+                "expiring_soon": 0,
+                "recently_accessed": 0,
+                "idle_sessions": 0,
+            },
+            "usage_metrics": {
+                "total_tokens_input": 0,
+                "total_tokens_output": 0,
+                "avg_tokens_per_session": 0,
+                "high_usage_sessions": 0,
+            },
+            "workspace_distribution": {
+                "with_workspace": 0,
+                "without_workspace": 0,
+                "unique_workspaces": 0,
+            },
+            "expiry_stats": {
+                "expiring_1h": 0,
+                "expiring_24h": 0,
+                "expired_awaiting_cleanup": 0,
+            },
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
