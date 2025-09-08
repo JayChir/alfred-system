@@ -20,31 +20,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.services.cache_service import DEFAULT_TTL_POLICIES, MAX_CACHE_ENTRY_SIZE
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Maximum cache entry size (250KB)
-MAX_CACHE_ENTRY_SIZE = 250 * 1024
-
 # Stale-if-error grace period (30 seconds)
 STALE_IF_ERROR_GRACE_SECONDS = 30
-
-# Default TTL policies per tool (in seconds)
-DEFAULT_TTL_POLICIES = {
-    # Notion tools
-    "notion:get_page": 14400,  # 4 hours for document content
-    "notion:get_database": 86400,  # 24 hours for schema (rarely changes)
-    "notion:search": 14400,  # 4 hours for search results
-    "notion:list_pages": 3600,  # 1 hour for listings
-    # GitHub tools
-    "github:get_repo": 86400,  # 24 hours for repo metadata
-    "github:get_file": 14400,  # 4 hours for file content
-    "github:search": 3600,  # 1 hour for search (more dynamic)
-    "github:list_pulls": 900,  # 15 minutes for PR lists
-    # Default fallback
-    "*": 3600,  # 1 hour for unknown tools
-}
 
 
 def _normalize_value(val: Any) -> Any:
@@ -249,7 +231,7 @@ class PostgreSQLInvokeCache:
                             SELECT content, expires_at, created_at
                             FROM agent_cache
                             WHERE cache_key = :key
-                              AND expires_at > NOW() - INTERVAL ':grace seconds'
+                              AND expires_at > NOW() - INTERVAL '1 second' * :grace
                             LIMIT 1
                         """
                         ),
@@ -477,7 +459,7 @@ class PostgreSQLInvokeCache:
                     WHERE cache_key IN (
                         SELECT DISTINCT cache_key
                         FROM agent_cache_tags
-                        WHERE tag = ANY(:tags)
+                        WHERE tag = ANY(:tags::text[])
                     )
                 """
                 ),
@@ -516,7 +498,8 @@ class PostgreSQLInvokeCache:
         # Generate 64-bit lock key from cache key
         lock_key = int(hashlib.sha1(cache_key.encode()).hexdigest()[:16], 16)
 
-        try:
+        # Ensure transaction scope for advisory lock
+        async with self.db.begin():
             # Acquire advisory lock (transaction-scoped)
             await self.db.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
@@ -530,10 +513,7 @@ class PostgreSQLInvokeCache:
             # Cache miss - fill it
             result = await fill_fn()
             return result, False
-
-        finally:
             # Lock automatically released at transaction end
-            pass
 
     def stats(self) -> Dict[str, Any]:
         """

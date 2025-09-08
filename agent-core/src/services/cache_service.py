@@ -1,10 +1,10 @@
 """
-In-memory cache service with TTL support and future Redis compatibility.
+Cache service with memory and PostgreSQL backend support.
 
 This module provides a transport-agnostic cache interface using Python Protocol
-for easy migration to Redis or other backends. The memory implementation uses
-cachetools TTLCache with per-entry TTL support, singleflight pattern for
-thundering herd prevention, and comprehensive metrics.
+for easy migration between backends. Supports memory (TTLCache) and PostgreSQL
+implementations with per-entry TTL support, singleflight pattern for thundering
+herd prevention, and comprehensive metrics.
 """
 
 import asyncio
@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from cachetools import TTLCache
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.utils.logging import get_logger
 
@@ -445,18 +446,60 @@ def make_cache_key(
     return key
 
 
+# Default TTL policies per tool (in seconds)
+# Can be overridden via environment variables
+DEFAULT_TTL_POLICIES = {
+    # Notion tools
+    "notion:get_page": 14400,  # 4 hours for document content
+    "notion:get_database": 86400,  # 24 hours for schema (rarely changes)
+    "notion:search": 14400,  # 4 hours for search results
+    "notion:list_pages": 3600,  # 1 hour for listings
+    # GitHub tools
+    "github:get_repo": 86400,  # 24 hours for repo metadata
+    "github:get_file": 14400,  # 4 hours for file content
+    "github:search": 3600,  # 1 hour for search (more dynamic)
+    "github:list_pulls": 900,  # 15 minutes for PR lists
+    # Default fallback
+    "*": 3600,  # 1 hour for unknown tools
+}
+
+# Maximum cache entry size (250KB)
+MAX_CACHE_ENTRY_SIZE = 250 * 1024
+
 # Module-level cache instance (singleton)
-_cache_instance: Optional[MemoryInvokeCache] = None
+_cache_instance: Optional[InvokeCache] = None
 
 
-def get_cache_service() -> MemoryInvokeCache:
+def get_cache_service(
+    backend: str = "memory", db_session: Optional[AsyncSession] = None
+) -> InvokeCache:
     """
-    Get the singleton cache service instance.
+    Get the cache service instance for the specified backend.
+
+    Args:
+        backend: Cache backend type ("memory" or "postgres")
+        db_session: Database session required for PostgreSQL backend
 
     Returns:
-        The global MemoryInvokeCache instance
+        Cache service instance implementing InvokeCache protocol
+
+    Raises:
+        ValueError: If PostgreSQL backend requested without db_session
     """
     global _cache_instance
-    if _cache_instance is None:
-        _cache_instance = MemoryInvokeCache()
-    return _cache_instance
+
+    if backend == "postgres":
+        if not db_session:
+            raise ValueError("PostgreSQL cache backend requires a database session")
+
+        # Import here to avoid circular dependencies
+        from src.services.postgres_cache import PostgreSQLInvokeCache
+
+        # PostgreSQL cache is session-scoped, not singleton
+        return PostgreSQLInvokeCache(db_session, ttl_policies=DEFAULT_TTL_POLICIES)
+
+    else:
+        # Memory cache is singleton
+        if _cache_instance is None:
+            _cache_instance = MemoryInvokeCache()
+        return _cache_instance
