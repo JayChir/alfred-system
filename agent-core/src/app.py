@@ -41,6 +41,7 @@ def validate_configuration() -> Settings:
             log_level=settings.log_level,
             app_env=settings.app_env,
             app_version=settings.app_version,
+            log_file="logs/app.log",  # Add file logging
         )
 
         # Get logger after configuration

@@ -8,7 +8,7 @@ and .env files. All settings are validated at startup to fail fast with clear er
 
 import json
 import secrets
-from typing import Annotated, Any, ClassVar, Dict, List, Optional, Tuple
+from typing import Annotated, Any, ClassVar, Dict, List, Optional, Set, Tuple
 
 import structlog
 from pydantic import (
@@ -262,27 +262,82 @@ class Settings(BaseSettings):
         ge=0,
     )
 
-    # ===== Cacheable Tools Configuration =====
-    # Define which MCP tools are safe to cache (idempotent reads only)
-    # Format: {("server", "tool"): ttl_seconds}
-    # This is defined as a class attribute, not an instance field
-    CACHEABLE_TOOLS: ClassVar[Dict[Tuple[str, str], int]] = {
-        # Notion tools - longer TTL for stable content (using actual MCP tool names)
-        ("notion", "API-retrieve-a-page"): 900,  # 15 min - pages change slowly
-        ("notion", "API-post-search"): 300,  # 5 min - search results more dynamic
-        ("notion", "API-retrieve-a-database"): 900,  # 15 min - schema rarely changes
-        ("notion", "API-post-database-query"): 300,  # 5 min - query results dynamic
-        ("notion", "API-retrieve-a-comment"): 300,  # 5 min - comments can be added
-        # GitHub tools - moderate TTL for code content
-        ("github", "get_issue"): 600,  # 10 min - issue details
-        ("github", "search_repositories"): 300,  # 5 min - search results
-        ("github", "get_file_contents"): 1800,  # 30 min - code rarely changes
-        ("github", "list_issues"): 300,  # 5 min - issue list can change
-        ("github", "get_pull_request"): 600,  # 10 min - PR details
-        # Explicitly excluded (non-cacheable):
-        # - time.get_current_time (always needs to be fresh)
-        # - All mutation operations (create, update, delete)
-        # - OAuth operations (security sensitive)
+    # ===== Cache Configuration =====
+    # Tools that should NEVER be cached (mutations, time-sensitive, auth operations)
+    # All other tools will be cached with default TTL unless specified
+    CACHE_DENYLIST: ClassVar[Set[str]] = {
+        # Time-sensitive operations (any server)
+        "get_current_time",
+        "convert_time",
+        "get_time",
+        "now",
+        # Mutation operations (any server) - anything that changes state
+        "create",
+        "update",
+        "delete",
+        "patch",
+        "put",
+        "post",
+        "add",
+        "remove",
+        "modify",
+        "set",
+        "clear",
+        "reset",
+        "merge",
+        "fork",
+        "push",
+        "pull",
+        "commit",
+        "rollback",
+        "approve",
+        "reject",
+        "close",
+        "open",
+        "archive",
+        "unarchive",
+        "assign",
+        "unassign",
+        "label",
+        "unlabel",
+        "tag",
+        "untag",
+        # Authentication/OAuth operations
+        "auth",
+        "oauth",
+        "login",
+        "logout",
+        "token",
+        "refresh",
+        "connect",
+        "disconnect",
+        "authorize",
+        "revoke",
+        # Notification/webhook operations
+        "notify",
+        "send",
+        "email",
+        "webhook",
+        "subscribe",
+        "unsubscribe",
+    }
+
+    # Custom TTLs for specific tools (optional overrides)
+    # Format: {("server", "tool_pattern"): ttl_seconds}
+    CACHE_TTL_OVERRIDES: ClassVar[Dict[Tuple[str, str], int]] = {
+        # Notion - longer TTL for stable content
+        ("notion", "*page*"): 900,  # 15 min - pages change slowly
+        ("notion", "*database*"): 900,  # 15 min - schema rarely changes
+        ("notion", "*search*"): 300,  # 5 min - search results more dynamic
+        # GitHub - varied TTLs based on content type
+        ("github-*", "*file*"): 1800,  # 30 min - code rarely changes
+        ("github-*", "*issue*"): 600,  # 10 min - issues update moderately
+        ("github-*", "*pull*"): 600,  # 10 min - PRs update moderately
+        ("github-*", "*search*"): 300,  # 5 min - search results change
+        ("github-*", "*list*"): 300,  # 5 min - lists change frequently
+        # Atlassian
+        ("atlassian", "*page*"): 900,  # 15 min - Confluence pages
+        ("atlassian", "*issue*"): 600,  # 10 min - JIRA issues
     }
 
     # ===== Thread Configuration (Issue #51) =====

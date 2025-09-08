@@ -164,7 +164,7 @@ class NotionMCPClients:
         async with lock:
             try:
                 # Get fresh token using existing infrastructure
-                async with get_async_session() as db:
+                async for db in get_async_session():
                     connections = await self.oauth.ensure_token_fresh(db, user_id)
 
                     # Find Notion connection

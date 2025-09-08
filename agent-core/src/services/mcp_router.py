@@ -272,20 +272,74 @@ class MCPRouter:
                         user_message_id = getattr(deps, "user_message_id", None)
                         call_index = getattr(deps, "tool_call_index", 0)
 
-                        # Check if tool is cacheable
-                        cache_key_tuple = (current_config.name, name)
-                        ttl = self.settings.CACHEABLE_TOOLS.get(cache_key_tuple)
+                        # Check if tool should be cached (denylist approach)
+                        # Extract base tool name (remove server prefix if present)
+                        base_tool_name = name
+                        if name.startswith(f"{current_config.name}_"):
+                            base_tool_name = name[len(f"{current_config.name}_") :]
+
+                        # Check if any denylist pattern matches this tool
+                        is_denied = False
+                        for pattern in self.settings.CACHE_DENYLIST:
+                            if pattern in base_tool_name.lower():
+                                is_denied = True
+                                break
+
+                        # Determine TTL - check for overrides first, then use default
+                        ttl = None
+                        if not is_denied:
+                            # Check for specific overrides
+                            for (
+                                (server_pattern, tool_pattern),
+                                override_ttl,
+                            ) in self.settings.CACHE_TTL_OVERRIDES.items():
+                                # Check if server matches (support wildcards like "github-*")
+                                server_matches = (
+                                    server_pattern == current_config.name
+                                    or (
+                                        server_pattern.endswith("*")
+                                        and current_config.name.startswith(
+                                            server_pattern[:-1]
+                                        )
+                                    )
+                                )
+                                # Check if tool matches (support wildcards like "*search*")
+                                tool_matches = (
+                                    tool_pattern == base_tool_name
+                                    or (
+                                        tool_pattern.startswith("*")
+                                        and tool_pattern.endswith("*")
+                                        and tool_pattern[1:-1] in base_tool_name
+                                    )
+                                    or (
+                                        tool_pattern.startswith("*")
+                                        and base_tool_name.endswith(tool_pattern[1:])
+                                    )
+                                    or (
+                                        tool_pattern.endswith("*")
+                                        and base_tool_name.startswith(tool_pattern[:-1])
+                                    )
+                                )
+
+                                if server_matches and tool_matches:
+                                    ttl = override_ttl
+                                    break
+
+                            # Use default TTL if no override found
+                            if ttl is None:
+                                ttl = self.settings.cache_ttl_default
 
                         logger.info(
                             "Cache lookup",
                             server=current_config.name,
                             tool=name,
-                            cache_key=cache_key_tuple,
+                            base_tool=base_tool_name,
+                            is_denied=is_denied,
                             ttl=ttl,
-                            allowlist=list(self.settings.CACHEABLE_TOOLS.keys()),
+                            cache_mode=cache_mode,
                         )
 
-                        if not ttl or cache_mode == "bypass":
+                        if is_denied or not ttl or cache_mode == "bypass":
                             # Not cacheable or bypass mode - call directly
                             logger.debug(
                                 "Tool not cacheable or bypass mode",
@@ -348,7 +402,7 @@ class MCPRouter:
                                 thread_service = ThreadService()
 
                                 # Log tool call before execution
-                                async with get_async_session() as db:
+                                async for db in get_async_session():
                                     tool_log_entry = await thread_service.log_tool_call(
                                         db=db,
                                         request_id=request_id,
@@ -395,7 +449,7 @@ class MCPRouter:
                             # Update tool log on success
                             if tool_log_entry:
                                 try:
-                                    async with get_async_session() as db:
+                                    async for db in get_async_session():
                                         await thread_service.update_tool_call_status(
                                             db=db,
                                             log_entry=tool_log_entry,
@@ -414,7 +468,7 @@ class MCPRouter:
                             # Update tool log on failure
                             if tool_log_entry:
                                 try:
-                                    async with get_async_session() as db:
+                                    async for db in get_async_session():
                                         await thread_service.update_tool_call_status(
                                             db=db,
                                             log_entry=tool_log_entry,
@@ -446,7 +500,7 @@ class MCPRouter:
                                     # Refresh token (may be no-op if already fresh)
                                     from ..db import get_async_session
 
-                                    async with get_async_session() as db:
+                                    async for db in get_async_session():
                                         await self.notion_clients.oauth.ensure_token_fresh(
                                             db, user_id
                                         )
@@ -465,7 +519,7 @@ class MCPRouter:
                                     # Update tool log on successful retry
                                     if tool_log_entry:
                                         try:
-                                            async with get_async_session() as db:
+                                            async for db in get_async_session():
                                                 await thread_service.update_tool_call_status(
                                                     db=db,
                                                     log_entry=tool_log_entry,
@@ -792,15 +846,18 @@ class MCPRouter:
         Returns:
             Tuple of (result, cache_metadata) where cache_metadata includes hit/miss info
         """
-        # Check if tool is cacheable based on allowlist
-        cache_key_tuple = (server_name, tool_name)
-        settings = self.settings
-        cacheable_tools = getattr(settings, "CACHEABLE_TOOLS", {})
+        # Check if tool should be cached (denylist approach)
+        # Check if any denylist pattern matches this tool
+        is_denied = False
+        for pattern in self.settings.CACHE_DENYLIST:
+            if pattern in tool_name.lower():
+                is_denied = True
+                break
 
-        if cache_key_tuple not in cacheable_tools:
-            # Tool not in allowlist - call directly without caching
+        if is_denied:
+            # Tool is in denylist - call directly without caching
             logger.debug(
-                "Tool not cacheable (not in allowlist)",
+                "Tool not cacheable (in denylist)",
                 server=server_name,
                 tool=tool_name,
             )
@@ -809,8 +866,42 @@ class MCPRouter:
             )
             return result, {"cacheHit": False, "cacheable": False}
 
-        # Get TTL for this specific tool
-        ttl_s = cacheable_tools[cache_key_tuple]
+        # Determine TTL - check for overrides first, then use default
+        ttl_s = None
+        for (
+            server_pattern,
+            tool_pattern,
+        ), override_ttl in self.settings.CACHE_TTL_OVERRIDES.items():
+            # Check if server matches (support wildcards like "github-*")
+            server_matches = server_pattern == server_name or (
+                server_pattern.endswith("*")
+                and server_name.startswith(server_pattern[:-1])
+            )
+            # Check if tool matches (support wildcards like "*search*")
+            tool_matches = (
+                tool_pattern == tool_name
+                or (
+                    tool_pattern.startswith("*")
+                    and tool_pattern.endswith("*")
+                    and tool_pattern[1:-1] in tool_name
+                )
+                or (
+                    tool_pattern.startswith("*")
+                    and tool_name.endswith(tool_pattern[1:])
+                )
+                or (
+                    tool_pattern.endswith("*")
+                    and tool_name.startswith(tool_pattern[:-1])
+                )
+            )
+
+            if server_matches and tool_matches:
+                ttl_s = override_ttl
+                break
+
+        # Use default TTL if no override found
+        if ttl_s is None:
+            ttl_s = self.settings.cache_ttl_default
 
         # Generate cache key with proper scoping
         cache_key = make_cache_key(
@@ -1000,10 +1091,10 @@ class MCPRouter:
         settings = self.settings
         cache_stats.update(
             {
-                "default_ttl": getattr(settings, "cache_ttl_default", 300),
-                "notion_ttl": getattr(settings, "cache_ttl_notion", 300),
-                "github_ttl": getattr(settings, "cache_ttl_github", 900),
-                "cacheable_tools": len(getattr(settings, "CACHEABLE_TOOLS", {})),
+                "default_ttl": getattr(settings, "cache_ttl_default", 3600),
+                "denylist_patterns": len(getattr(settings, "CACHE_DENYLIST", set())),
+                "ttl_overrides": len(getattr(settings, "CACHE_TTL_OVERRIDES", {})),
+                "cache_approach": "denylist",  # Changed from allowlist
             }
         )
 

@@ -171,7 +171,7 @@ class TokenRefreshService:
         try:
             logger.debug("Starting background token refresh sweep")
 
-            async with get_async_session() as db:
+            async for db in get_async_session():
                 # Get all active connections that support refresh
                 connections = await self._get_refresh_candidates(db)
                 connections_processed = len(connections)

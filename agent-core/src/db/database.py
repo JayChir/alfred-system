@@ -124,7 +124,7 @@ def get_engine(settings: Optional[Settings] = None) -> AsyncEngine:
                     f"-c application_name={settings.app_name.replace(' ', '_')}-{settings.app_version} "
                     "-c TimeZone=UTC "
                     "-c lock_timeout=5000 "  # 5 second lock timeout
-                    "-c idle_in_transaction_session_timeout=15000 "  # 15 seconds
+                    "-c idle_in_transaction_session_timeout=60000 "  # 60 seconds
                     "-c statement_timeout=60000"  # 60 seconds
                 ),
                 # Connection timeout (TCP handshake)

@@ -126,6 +126,7 @@ def configure_logging(
     app_env: str = "development",
     app_version: str = "0.1.0",
     json_format: bool = None,
+    log_file: str = None,
 ) -> None:
     """
     Configure structured logging for the application.
@@ -135,6 +136,7 @@ def configure_logging(
         app_env: Application environment (development, staging, production)
         app_version: Application version for tracking
         json_format: Force JSON output (None = auto-detect based on environment)
+        log_file: Optional file path to write logs to
 
     This configures structlog with appropriate processors for the environment:
     - Development: Human-readable console output with colors
@@ -145,9 +147,31 @@ def configure_logging(
         json_format = app_env in ["staging", "production"]
 
     # Configure Python's standard logging
+    handlers = [logging.StreamHandler(sys.stdout)]
+
+    # Add file handler if log_file is specified
+    if log_file:
+        import os
+
+        # Create logs directory if it doesn't exist
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+
+        # Add rotating file handler to prevent log files from growing too large
+        from logging.handlers import RotatingFileHandler
+
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+        handlers.append(file_handler)
+
     logging.basicConfig(
         format="%(message)s",
-        stream=sys.stdout,
+        handlers=handlers,
         level=getattr(logging, log_level.upper()),
     )
 
