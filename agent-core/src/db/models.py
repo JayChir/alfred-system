@@ -164,6 +164,7 @@ class DeviceSession(Base):
 
     # Secure token storage (SHA-256 hash only)
     device_token_hash: Mapped[bytes] = mapped_column(
+        "session_token_hash",  # Actual column name in database
         LargeBinary(32),  # Exactly SHA-256 size
         unique=True,
         nullable=False,

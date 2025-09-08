@@ -208,10 +208,10 @@ async def verify_api_key(
 async def chat_endpoint(
     request: Request,
     chat_request: ChatRequest,
+    device_session: OptionalDeviceSession,  # Optional device session context
+    stream: bool = False,  # Query parameter to enable streaming
     api_key: str = Depends(verify_api_key),
     db: AsyncSession = Depends(get_db),  # noqa: B008
-    device_session: OptionalDeviceSession = None,  # Optional device session context
-    stream: bool = False,  # Query parameter to enable streaming
 ) -> Any:
     """
     Main chat endpoint for AI agent interaction with thread support.

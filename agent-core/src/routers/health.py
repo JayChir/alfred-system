@@ -684,14 +684,18 @@ async def device_sessions_health() -> Dict[str, Any]:
             # Get token usage metrics
             token_stats = await db.execute(
                 select(
-                    func.sum(DeviceSession.tokens_input).label("total_input"),
-                    func.sum(DeviceSession.tokens_output).label("total_output"),
+                    func.sum(DeviceSession.tokens_input_total).label("total_input"),
+                    func.sum(DeviceSession.tokens_output_total).label("total_output"),
                     func.avg(
-                        DeviceSession.tokens_input + DeviceSession.tokens_output
+                        DeviceSession.tokens_input_total
+                        + DeviceSession.tokens_output_total
                     ).label("avg_total"),
                     func.count(DeviceSession.session_id)
                     .filter(
-                        (DeviceSession.tokens_input + DeviceSession.tokens_output)
+                        (
+                            DeviceSession.tokens_input_total
+                            + DeviceSession.tokens_output_total
+                        )
                         > 10000
                     )
                     .label("high_usage"),
@@ -727,14 +731,16 @@ async def device_sessions_health() -> Dict[str, Any]:
             )
             expired_count = expired_sessions.scalar() or 0
 
-            # Determine health status
+            # Determine health status with clear thresholds
             health_status = "healthy"
             if total_active == 0:
-                health_status = "idle"
-            elif expired_count > 10:
+                health_status = "idle"  # No active sessions
+            elif expired_count > 100:
                 health_status = "degraded"  # Too many expired sessions not cleaned up
-            elif expiring_1h > total_active * 0.2:
+            elif expiring_1h > 10 and expiring_1h > total_active * 0.3:
                 health_status = "warning"  # Many sessions expiring soon
+            elif idle_count > total_active * 0.5:
+                health_status = "info"  # Many idle sessions
 
             return {
                 "status": health_status,

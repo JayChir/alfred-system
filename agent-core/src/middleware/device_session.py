@@ -17,7 +17,7 @@ from typing import Annotated, Optional
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.database import get_db
+from src.db.database import get_async_session
 from src.services.device_session_service import DeviceSessionService
 from src.utils.device_token import validate_token_format
 from src.utils.logging import get_logger
@@ -75,18 +75,11 @@ class DeviceSessionDependency:
             logger.debug("Device token extracted from cookie")
             return cookie_token
 
-        # 3. Check request body for non-GET requests
-        if request.method != "GET":
-            try:
-                # Try to access body if it's JSON
-                if hasattr(request, "_json") and request._json:
-                    body_token = request._json.get("deviceToken")
-                    if body_token and validate_token_format(body_token):
-                        logger.debug("Device token extracted from request body")
-                        return body_token
-            except Exception:
-                # Body might not be JSON or accessible, continue without error
-                pass
+        # 3. Device token from body is handled by endpoint parameters
+        # We don't try to extract from body in middleware to avoid
+        # consuming the request body stream which would prevent
+        # endpoints from reading it. Endpoints should accept
+        # deviceToken as an explicit parameter if needed.
 
         logger.debug("No valid device token found in request")
         return None
@@ -94,7 +87,7 @@ class DeviceSessionDependency:
     async def get_optional_session_context(
         self,
         request: Request,
-        db: Annotated[AsyncSession, Depends(get_db)],
+        db: Annotated[AsyncSession, Depends(get_async_session)],
         authorization: Annotated[Optional[str], Header()] = None,
     ) -> Optional[DeviceSessionContext]:
         """
@@ -142,7 +135,7 @@ class DeviceSessionDependency:
     async def get_required_session_context(
         self,
         request: Request,
-        db: Annotated[AsyncSession, Depends(get_db)],
+        db: Annotated[AsyncSession, Depends(get_async_session)],
         authorization: Annotated[Optional[str], Header()] = None,
     ) -> DeviceSessionContext:
         """

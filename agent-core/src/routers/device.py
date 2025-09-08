@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import Settings, get_settings
 from src.db.database import get_async_session as get_db
 from src.middleware.device_session import RequiredDeviceSession
 from src.services.device_session_service import DeviceSessionService
@@ -68,6 +69,7 @@ async def create_device_session(
     request: CreateDeviceSessionRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> CreateDeviceSessionResponse:
     """
     Create a new device session for authentication and token metering.
@@ -127,13 +129,14 @@ async def create_device_session(
 
         # Set cookie for browser-based clients (optional)
         # Cookie is HttpOnly for security, with 7-day expiry
+        # Use secure flag in production for HTTPS-only transmission
         response.set_cookie(
             key="dtok",
             value=token,
             httponly=True,
             samesite="lax",
             max_age=7 * 24 * 3600,  # 7 days in seconds
-            secure=False,  # Set to True in production with HTTPS
+            secure=settings.app_env == "production",  # Secure in production only
         )
 
         logger.info(

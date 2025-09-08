@@ -258,8 +258,11 @@ class DeviceSessionService:
             sa.text(
                 """
                 DELETE FROM device_sessions
-                WHERE (expires_at <= now()) OR (hard_expires_at <= now())
-                LIMIT 1000
+                WHERE ctid IN (
+                    SELECT ctid FROM device_sessions
+                    WHERE (expires_at <= now()) OR (hard_expires_at <= now())
+                    LIMIT 1000
+                )
             """
             )
         )
