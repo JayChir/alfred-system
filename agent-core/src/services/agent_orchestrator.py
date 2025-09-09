@@ -426,8 +426,16 @@ class AgentOrchestrator:
                 if context_id:
                     self.contexts[context_id] = list(result.all_messages())
 
-                # Send final event with usage stats
+                # Send final event with usage stats and cache metadata
                 usage = result.usage()
+
+                # Include cache metadata if available
+                cache_hit = False
+                cache_ttl_remaining = None
+                if hasattr(deps, "cache_metadata"):
+                    cache_hit = deps.cache_metadata.get("cache_hit", False)
+                    cache_ttl_remaining = deps.cache_metadata.get("cache_ttl_remaining")
+
                 yield StreamEvent(
                     type="final",
                     data={
@@ -438,6 +446,8 @@ class AgentOrchestrator:
                         },
                         "duration_ms": int((time.time() - start_time) * 1000),
                         "model": self.settings.anthropic_model,
+                        "cacheHit": cache_hit,
+                        "cacheTtlRemaining": cache_ttl_remaining,
                     },
                     request_id=request_id,
                 )
