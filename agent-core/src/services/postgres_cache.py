@@ -302,16 +302,17 @@ class PostgreSQLInvokeCache:
         labels: Optional[List[str]] = None,
     ) -> bool:
         """
-        Set cache value with UPSERT operation.
+        Set cache value with UPSERT operation and tag management.
 
         Uses INSERT ... ON CONFLICT UPDATE to atomically set or update
-        the cache entry with all metadata fields.
+        the cache entry with all metadata fields. Also manages cache tags
+        for efficient invalidation.
 
         Args:
             key: Cache key
             value: Value to cache
             ttl_s: Time-to-live in seconds
-            labels: Optional tags for invalidation
+            labels: Optional tags for invalidation (e.g., ['tool:notion.get_page', 'workspace:W123'])
 
         Returns:
             True if cached successfully, False if size exceeded or error
@@ -338,15 +339,17 @@ class PostgreSQLInvokeCache:
             # Calculate expiry time
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_s)
 
-            # UPSERT the cache entry
-            await self.db.execute(
-                text(
-                    """
-                    INSERT INTO agent_cache (
-                        cache_key, content, content_hash, idempotent,
-                        expires_at, created_at, updated_at, last_accessed, size_bytes
-                    )
-                    VALUES (
+            # Begin transaction for cache entry and tags
+            async with self.db.begin():
+                # UPSERT the cache entry
+                await self.db.execute(
+                    text(
+                        """
+                        INSERT INTO agent_cache (
+                            cache_key, content, content_hash, idempotent,
+                            expires_at, created_at, updated_at, last_accessed, size_bytes
+                        )
+                        VALUES (
                         :key, CAST(:content AS jsonb), :hash, true,
                         :expires_at, NOW(), NOW(), NOW(), :size
                     )
@@ -360,38 +363,37 @@ class PostgreSQLInvokeCache:
                         size_bytes = EXCLUDED.size_bytes,
                         hit_count = agent_cache.hit_count  -- Preserve hit count
                 """
-                ),
-                {
-                    "key": key,
-                    "content": content_json,
-                    "hash": content_hash,
-                    "expires_at": expires_at,
-                    "size": size_bytes,
-                },
-            )
-
-            # Insert tags if provided
-            if labels:
-                # Delete existing tags for this key
-                await self.db.execute(
-                    text("DELETE FROM agent_cache_tags WHERE cache_key = :key"),
-                    {"key": key},
+                    ),
+                    {
+                        "key": key,
+                        "content": content_json,
+                        "hash": content_hash,
+                        "expires_at": expires_at,
+                        "size": size_bytes,
+                    },
                 )
 
-                # Insert new tags
-                for tag in labels:
+                # Insert tags if provided
+                if labels:
+                    # Delete existing tags for this key first
                     await self.db.execute(
-                        text(
-                            """
-                            INSERT INTO agent_cache_tags (cache_key, tag)
-                            VALUES (:key, :tag)
-                            ON CONFLICT DO NOTHING
-                        """
-                        ),
-                        {"key": key, "tag": tag},
+                        text("DELETE FROM agent_cache_tags WHERE cache_key = :key"),
+                        {"key": key},
                     )
 
-            await self.db.commit()
+                    # Insert new tags in batch for efficiency
+                    if labels:
+                        tag_values = [{"key": key, "tag": tag} for tag in labels]
+                        await self.db.execute(
+                            text(
+                                """
+                                INSERT INTO agent_cache_tags (cache_key, tag)
+                                VALUES (:key, :tag)
+                                ON CONFLICT DO NOTHING
+                                """
+                            ),
+                            tag_values,
+                        )
             self._stats["sets"] += 1
 
             logger.debug(
@@ -438,20 +440,57 @@ class PostgreSQLInvokeCache:
             await self.db.rollback()
             return False
 
-    async def invalidate_by_tags(self, tags: List[str]) -> int:
+    async def invalidate_by_tags(
+        self, tags: List[str], *, max_entries: int = 500, force: bool = False
+    ) -> Dict[str, Any]:
         """
-        Invalidate cache entries by tags.
+        Invalidate cache entries by tags with safety caps.
 
-        Enables efficient invalidation of related entries,
-        such as all cache entries for a modified Notion page.
+        This method removes cache entries that match any of the provided tags,
+        with built-in safety to prevent accidental global cache wipes.
 
         Args:
-            tags: Tags to invalidate
+            tags: Tags to invalidate (e.g., ['tool:notion.get_page', 'workspace:W123'])
+            max_entries: Maximum entries to invalidate (safety cap)
+            force: Override safety cap (requires admin flag)
 
         Returns:
-            Number of entries invalidated
+            Dictionary with invalidation results including count and any warnings
         """
+        if not tags:
+            return {"invalidated": 0, "error": "No tags provided"}
+
         try:
+            # First, count how many entries would be affected
+            count_result = await self.db.execute(
+                text(
+                    """
+                    SELECT COUNT(DISTINCT cache_key) as count
+                    FROM agent_cache_tags
+                    WHERE tag = ANY(CAST(:tags AS text[]))
+                    """
+                ),
+                {"tags": tags},
+            )
+            potential_count = count_result.scalar() or 0
+
+            # Safety check: prevent massive invalidations
+            if potential_count > max_entries and not force:
+                logger.warning(
+                    "Cache invalidation capped for safety",
+                    tags=tags,
+                    potential_count=potential_count,
+                    max_entries=max_entries,
+                )
+                return {
+                    "invalidated": 0,
+                    "capped": True,
+                    "potential_count": potential_count,
+                    "max_entries": max_entries,
+                    "warning": f"Would invalidate {potential_count} entries, exceeding cap of {max_entries}",
+                }
+
+            # Perform the actual invalidation
             result = await self.db.execute(
                 text(
                     """
@@ -461,7 +500,7 @@ class PostgreSQLInvokeCache:
                         FROM agent_cache_tags
                         WHERE tag = ANY(CAST(:tags AS text[]))
                     )
-                """
+                    """
                 ),
                 {"tags": tags},
             )
@@ -471,11 +510,58 @@ class PostgreSQLInvokeCache:
 
             if count > 0:
                 logger.info("Cache entries invalidated by tags", tags=tags, count=count)
+                self._stats["invalidations"] = (
+                    self._stats.get("invalidations", 0) + count
+                )
+
+            return {
+                "invalidated": count,
+                "tags": tags,
+                "capped": False,
+            }
+
+        except Exception as e:
+            logger.error("Tag invalidation error", tags=tags, error=str(e))
+            await self.db.rollback()
+            return {"invalidated": 0, "error": str(e)}
+
+    async def invalidate_exact(self, keys: List[str]) -> int:
+        """
+        Invalidate cache entries by exact keys.
+
+        Args:
+            keys: Exact cache keys to invalidate
+
+        Returns:
+            Number of entries invalidated
+        """
+        if not keys:
+            return 0
+
+        try:
+            result = await self.db.execute(
+                text(
+                    """
+                    DELETE FROM agent_cache
+                    WHERE cache_key = ANY(CAST(:keys AS text[]))
+                    """
+                ),
+                {"keys": keys},
+            )
+
+            await self.db.commit()
+            count = result.rowcount or 0
+
+            if count > 0:
+                logger.info("Cache entries invalidated by keys", count=count)
+                self._stats["invalidations"] = (
+                    self._stats.get("invalidations", 0) + count
+                )
 
             return count
 
         except Exception as e:
-            logger.error("Tag invalidation error", tags=tags, error=str(e))
+            logger.error("Key invalidation error", keys=keys[:3], error=str(e))
             await self.db.rollback()
             return 0
 
