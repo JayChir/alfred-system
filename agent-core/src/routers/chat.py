@@ -716,8 +716,8 @@ async def chat_endpoint(
                 return ChatResponse(
                     reply=result.reply,
                     meta=ResponseMeta(
-                        cacheHit=False,  # TODO: Implement caching in Issue #10
-                        cacheTtlRemaining=None,
+                        cacheHit=result.meta.get("cacheHit", False),
+                        cacheTtlRemaining=result.meta.get("cacheTtlRemaining"),
                         tokens=TokenUsage(
                             input=result.meta.get("usage", {}).get("input_tokens", 0),
                             output=result.meta.get("usage", {}).get("output_tokens", 0),

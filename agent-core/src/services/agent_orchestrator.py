@@ -8,7 +8,7 @@ non-streaming responses.
 
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -36,6 +36,7 @@ class AgentDeps:
     cache_mode: str = "prefer"  # prefer|refresh|bypass
     user_scope: str = "global"  # Will be user_id:workspace_id later
     tool_call_index: int = 0  # Counter for tool calls in this execution
+    cache_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
@@ -51,6 +52,9 @@ class ChatRequest(BaseModel):
         300.0, description="Maximum execution time in seconds"
     )
     force_refresh: bool = Field(False, description="Force refresh of cached data")
+    cache_metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Cache metadata from tool calls"
+    )
 
 
 class ChatResponse(BaseModel):
@@ -305,8 +309,11 @@ class AgentOrchestrator:
                 deps=deps,  # Pass thread context for tool journaling
             )
 
-            # Extract tool calls from messages
+            # Extract tool calls from messages and check for cache metadata
             tool_calls = []
+            cache_hit = False
+            cache_ttl_remaining = None
+
             for msg in result.all_messages():
                 if hasattr(msg, "role") and msg.role == "tool":
                     tool_calls.append(
@@ -316,6 +323,11 @@ class AgentOrchestrator:
                             "result": msg.content,  # Full result for now (no placeholders)
                         }
                     )
+
+            # Check if any tool calls were cached (from deps)
+            if hasattr(deps, "cache_metadata"):
+                cache_hit = deps.cache_metadata.get("cache_hit", False)
+                cache_ttl_remaining = deps.cache_metadata.get("cache_ttl_remaining")
 
             # Update context history if context_id provided
             if context_id:
@@ -334,6 +346,8 @@ class AgentOrchestrator:
                         "output_tokens": usage.output_tokens,
                         "total_tokens": usage.total_tokens,
                     },
+                    "cacheHit": cache_hit,
+                    "cacheTtlRemaining": cache_ttl_remaining,
                     "request_id": request_id,
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "model": self.settings.anthropic_model,

@@ -372,6 +372,13 @@ class MCPRouter:
                                         "_cache_ttl_remaining_s", 0
                                     ),
                                 )
+                                # Update deps with cache metadata if available
+                                if hasattr(deps, "cache_metadata"):
+                                    deps.cache_metadata["cache_hit"] = True
+                                    deps.cache_metadata[
+                                        "cache_ttl_remaining"
+                                    ] = cached.get("_cache_ttl_remaining_s", 0)
+
                                 # Clean cache metadata before returning
                                 result = cached.copy()
                                 result.pop("_cached_at", None)
