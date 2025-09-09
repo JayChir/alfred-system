@@ -211,6 +211,7 @@ async def chat_endpoint(
     device_session: OptionalDeviceSession,  # Optional device session context
     stream: bool = False,  # Query parameter to enable streaming
     api_key: str = Depends(verify_api_key),
+    settings: Settings = Depends(get_settings),  # Settings dependency
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ) -> Any:
     """
@@ -267,6 +268,14 @@ async def chat_endpoint(
     else:
         # Fallback to header-based user ID (MVP)
         user_id = request.headers.get("X-User-ID")
+
+    # Use default user ID if none provided
+    if not user_id:
+        user_id = settings.default_user_id
+        logger.debug(
+            "Using default user ID",
+            user_id=user_id,
+        )
 
     # Log chat request with thread info
     logger.info(
@@ -507,7 +516,7 @@ async def chat_endpoint(
                     async for event in orchestrator.chat(
                         prompt=user_message_content,
                         context_id=f"ctx:thread:{thread.id}",
-                        user_id=str(user_id),
+                        user_id=str(user_id) if user_id else None,
                         workspace_id=effective_workspace,
                         thread_id=str(thread.id),
                         user_message_id=str(user_msg.id),
@@ -634,7 +643,7 @@ async def chat_endpoint(
                 result = await orchestrator.chat(
                     prompt=user_message_content,
                     context_id=f"ctx:thread:{thread.id}",
-                    user_id=str(user_id),
+                    user_id=str(user_id) if user_id else None,
                     workspace_id=effective_workspace,
                     thread_id=str(thread.id),
                     user_message_id=str(user_msg.id),
@@ -712,12 +721,17 @@ async def chat_endpoint(
                         token_prefix=share_token[:12] if share_token else None,
                     )
 
+                # Convert cacheTtlRemaining to int if present
+                cache_ttl = result.meta.get("cacheTtlRemaining")
+                if cache_ttl is not None:
+                    cache_ttl = int(cache_ttl)
+
                 # Return response with thread info
                 return ChatResponse(
                     reply=result.reply,
                     meta=ResponseMeta(
                         cacheHit=result.meta.get("cacheHit", False),
-                        cacheTtlRemaining=result.meta.get("cacheTtlRemaining"),
+                        cacheTtlRemaining=cache_ttl,
                         tokens=TokenUsage(
                             input=result.meta.get("usage", {}).get("input_tokens", 0),
                             output=result.meta.get("usage", {}).get("output_tokens", 0),
