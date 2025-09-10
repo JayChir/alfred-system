@@ -243,6 +243,14 @@ async def test_sse_warning_event():
                 assert len(warning_events) == 1
                 assert warning_events[0]["data"]["level"] == "warning"
                 assert warning_events[0]["data"]["percent_used"] == 85
+                assert "timestamp" in warning_events[0]["data"]
+
+                # Done event should reference warning
+                done_events = [e for e in events if e["type"] == "done"]
+                assert len(done_events) >= 1
+                # The warning field may be in the done event
+                if done_events:
+                    assert "timestamp" in done_events[0]["data"]
 
 
 def test_sse_headers():

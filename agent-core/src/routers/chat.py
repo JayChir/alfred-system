@@ -25,6 +25,13 @@ from src.services.thread_service import ThreadService
 from src.services.token_metering import get_token_metering_service
 from src.services.workspace_resolver import WorkspaceResolver
 from src.utils.logging import get_logger
+from src.utils.sse_utils import (
+    redact_sensitive_fields,
+    sse_format,
+    sse_heartbeat,
+    sse_retry,
+    truncate_tool_data,
+)
 from src.utils.validation import context_id_adhoc, require_prefix
 
 # Create router for chat endpoints
@@ -930,11 +937,25 @@ async def chat_stream_endpoint(
             """
             Generate Server-Sent Events for streaming with heartbeat.
 
-            Implements heartbeat mechanism for connection keepalive and
-            proper event typing for client consumption.
+            Implements:
+            - Proper SSE wire format using helper functions
+            - Client disconnect detection
+            - Comment-style heartbeats for efficiency
+            - Tool data protection (truncation/redaction)
+            - Single done event with comprehensive metadata
             """
             heartbeat_interval = 30  # Send heartbeat every 30 seconds
             last_heartbeat = asyncio.get_event_loop().time()
+
+            # Track accumulated usage for final done event
+            total_usage = {"input": 0, "output": 0}
+            cache_hits = 0
+            total_events = 0
+            tool_calls_made = []
+            stream_start_time = datetime.utcnow()
+
+            # Send initial retry directive (5 second reconnect)
+            yield sse_retry(5000)
 
             try:
                 # Start streaming from orchestrator
@@ -948,29 +969,100 @@ async def chat_stream_endpoint(
                 ).__aiter__()
 
                 while stream_active:
+                    # Check for client disconnect
+                    if await request.is_disconnected():
+                        logger.info(
+                            "Client disconnected from SSE stream",
+                            request_id=request_id,
+                            total_events=total_events,
+                            duration_ms=(
+                                datetime.utcnow() - stream_start_time
+                            ).total_seconds()
+                            * 1000,
+                        )
+                        break
+
                     try:
                         # Wait for next event with timeout for heartbeat
                         event = await asyncio.wait_for(
                             orchestrator_stream.__anext__(),
-                            timeout=1.0,  # Check every second for heartbeat
+                            timeout=1.0,  # Check every second
                         )
+
+                        total_events += 1
 
                         # Map orchestrator event types to SSE event types
                         if event.type == "text":
                             # Token/text chunk event
-                            yield f"event: token\ndata: {json.dumps({'content': event.data})}\n\n"
+                            yield sse_format(
+                                {"content": event.data},
+                                event="token",
+                                id=f"{request_id}-{total_events}",
+                            )
 
                         elif event.type == "tool_call":
-                            # Tool call event (start of tool execution)
-                            yield f"event: tool_call\ndata: {json.dumps(event.data)}\n\n"
+                            # Protect tool data from excessive size
+                            tool_data = (
+                                event.data.copy()
+                                if isinstance(event.data, dict)
+                                else {"data": event.data}
+                            )
+
+                            # Redact sensitive fields
+                            tool_data = redact_sensitive_fields(tool_data)
+
+                            # Truncate large results
+                            tool_data = truncate_tool_data(tool_data, max_length=2000)
+
+                            # Track tool call
+                            tool_name = tool_data.get("tool", "unknown")
+                            tool_calls_made.append(tool_name)
+
+                            # Add metadata
+                            tool_data["sequence"] = len(tool_calls_made)
+                            tool_data["timestamp"] = datetime.utcnow().isoformat()
+
+                            # Send tool_call event
+                            yield sse_format(
+                                tool_data,
+                                event="tool_call",
+                                id=f"{request_id}-{total_events}",
+                            )
 
                             # Also send tool_result if result is included
-                            if "result" in event.data:
-                                yield f"event: tool_result\ndata: {json.dumps({'tool': event.data.get('tool'), 'result': event.data.get('result')})}\n\n"
+                            if "result" in tool_data:
+                                result_data = {
+                                    "tool": tool_name,
+                                    "sequence": len(tool_calls_made),
+                                    "result": tool_data.get("result"),
+                                    "result_truncated": tool_data.get(
+                                        "result_truncated", False
+                                    ),
+                                }
+                                yield sse_format(
+                                    result_data,
+                                    event="tool_result",
+                                    id=f"{request_id}-{total_events}-result",
+                                )
 
                         elif event.type == "final":
-                            # Stream completion event
+                            # Update total usage
+                            usage = (
+                                event.data.get("usage", {})
+                                if isinstance(event.data, dict)
+                                else {}
+                            )
+                            total_usage["input"] += usage.get("input", 0)
+                            total_usage["output"] += usage.get("output", 0)
+
+                            # Track cache hit
+                            if isinstance(event.data, dict) and event.data.get(
+                                "cache_hit", False
+                            ):
+                                cache_hits += 1
+
                             # Check for budget warning
+                            warning_data = None
                             if user_id:
                                 try:
                                     user_uuid = UUID(user_id)
@@ -984,71 +1076,174 @@ async def chat_stream_endpoint(
                                     )
 
                                     if warning_level:
-                                        # Send warning event before done
+                                        # Prepare warning data
                                         warning_data = {
                                             "level": warning_level,
                                             "percent_used": percent_used,
                                             "message": f"Budget {warning_level}: {percent_used}% of daily limit used",
+                                            "timestamp": datetime.utcnow().isoformat(),
                                         }
-                                        yield f"event: warning\ndata: {json.dumps(warning_data)}\n\n"
+                                        # Send warning event before done
+                                        yield sse_format(
+                                            warning_data,
+                                            event="warning",
+                                            id=f"{request_id}-warning",
+                                        )
                                 except Exception as budget_err:
                                     logger.warning(f"Budget check failed: {budget_err}")
 
-                            # Send done event with metadata
+                            # Calculate stream duration
+                            stream_duration_ms = (
+                                datetime.utcnow() - stream_start_time
+                            ).total_seconds() * 1000
+
+                            # Send comprehensive done event with all metadata
                             done_data = {
-                                "usage": event.data.get("usage", {}),
-                                "cache_hit": event.data.get("cache_hit", False),
+                                "success": True,
+                                "usage": total_usage,
+                                "cache_metrics": {
+                                    "hits": cache_hits,
+                                    "total_calls": len(tool_calls_made),
+                                    "hit_rate": cache_hits / len(tool_calls_made)
+                                    if tool_calls_made
+                                    else 0,
+                                },
+                                "tools_used": list(
+                                    set(tool_calls_made)
+                                ),  # Unique tools
+                                "tool_call_count": len(tool_calls_made),
+                                "total_events": total_events,
+                                "stream_duration_ms": stream_duration_ms,
                                 "request_id": request_id,
                                 "timestamp": datetime.utcnow().isoformat(),
+                                "warning": warning_data,  # Include warning if any
                             }
-                            yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+                            yield sse_format(
+                                done_data,
+                                event="done",
+                                id=f"{request_id}-done",
+                            )
                             stream_active = False
 
                         else:
-                            # Unknown event type, pass through as-is
-                            yield f"data: {json.dumps(event.dict())}\n\n"
+                            # Unknown event type, pass through with proper format
+                            yield sse_format(
+                                event.dict()
+                                if hasattr(event, "dict")
+                                else {"data": str(event)},
+                                event="message",
+                                id=f"{request_id}-{total_events}",
+                            )
 
                     except asyncio.TimeoutError:
                         # Check if heartbeat is needed
                         current_time = asyncio.get_event_loop().time()
                         if current_time - last_heartbeat >= heartbeat_interval:
-                            # Send heartbeat event
-                            heartbeat_data = {
-                                "timestamp": datetime.utcnow().isoformat(),
-                                "request_id": request_id,
-                            }
-                            yield f"event: heartbeat\ndata: {json.dumps(heartbeat_data)}\n\n"
+                            # Send lightweight comment-style heartbeat
+                            yield sse_heartbeat()
                             last_heartbeat = current_time
 
+                            # Also check for disconnect during heartbeat
+                            if await request.is_disconnected():
+                                logger.info(
+                                    "Client disconnected during heartbeat",
+                                    request_id=request_id,
+                                    duration_ms=(
+                                        datetime.utcnow() - stream_start_time
+                                    ).total_seconds()
+                                    * 1000,
+                                )
+                                break
+
                     except StopAsyncIteration:
-                        # Stream ended normally
+                        # Stream ended normally - send final done if not already sent
+                        if stream_active:
+                            stream_duration_ms = (
+                                datetime.utcnow() - stream_start_time
+                            ).total_seconds() * 1000
+                            done_data = {
+                                "success": True,
+                                "usage": total_usage,
+                                "cache_metrics": {
+                                    "hits": cache_hits,
+                                    "total_calls": len(tool_calls_made),
+                                    "hit_rate": cache_hits / len(tool_calls_made)
+                                    if tool_calls_made
+                                    else 0,
+                                },
+                                "tools_used": list(set(tool_calls_made)),
+                                "tool_call_count": len(tool_calls_made),
+                                "total_events": total_events,
+                                "stream_duration_ms": stream_duration_ms,
+                                "request_id": request_id,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                            yield sse_format(
+                                done_data,
+                                event="done",
+                                id=f"{request_id}-done",
+                            )
                         stream_active = False
 
             except Exception as e:
-                # Send error event
+                # Log the error
+                logger.error(
+                    "SSE stream error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    request_id=request_id,
+                    total_events=total_events,
+                )
+
+                # Send error event with proper format
                 error_event = {
                     "error": str(e),
                     "type": type(e).__name__,
                     "request_id": request_id,
+                    "timestamp": datetime.utcnow().isoformat(),
                 }
-                yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+                yield sse_format(
+                    error_event,
+                    event="error",
+                    id=f"{request_id}-error",
+                )
 
-                # Send done event to signal stream end
+                # Send done event to signal stream end with error flag
+                stream_duration_ms = (
+                    datetime.utcnow() - stream_start_time
+                ).total_seconds() * 1000
                 done_data = {
+                    "success": False,
                     "error": True,
+                    "error_message": str(e),
+                    "error_type": type(e).__name__,
+                    "usage": total_usage,  # Include partial usage if available
+                    "tools_used": list(set(tool_calls_made)) if tool_calls_made else [],
+                    "tool_call_count": len(tool_calls_made),
+                    "total_events": total_events,
+                    "stream_duration_ms": stream_duration_ms,
                     "request_id": request_id,
                     "timestamp": datetime.utcnow().isoformat(),
                 }
-                yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+                yield sse_format(
+                    done_data,
+                    event="done",
+                    id=f"{request_id}-done-error",
+                )
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",  # Additional cache prevention
+                "Expires": "0",  # Immediate expiration
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",  # Disable Nginx buffering
                 "X-Request-ID": request_id,
+                "Access-Control-Allow-Origin": "*",  # CORS support for browsers
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, X-API-Key, X-User-ID, X-Workspace-ID",
             },
         )
 
