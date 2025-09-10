@@ -867,7 +867,7 @@ async def chat_endpoint(
 @router.get(
     "/chat/stream",
     summary="Stream chat responses via SSE",
-    description="Server-sent events endpoint for streaming responses",
+    description="Server-sent events endpoint for streaming responses with heartbeat",
     response_description="SSE stream of chat events",
 )
 async def chat_stream_endpoint(
@@ -875,27 +875,41 @@ async def chat_stream_endpoint(
     prompt: str,
     device_token: Optional[str] = None,
     api_key: str = Depends(verify_api_key),
+    db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """
-    SSE streaming endpoint for real-time chat responses.
+    SSE streaming endpoint for real-time chat responses with heartbeat.
 
     This provides an alternative GET endpoint for streaming.
     The POST /chat endpoint with stream=true is preferred.
 
     Event types:
-    - text: Streaming text chunks
-    - tool_call: MCP tool invocation
+    - token: Streaming text tokens/chunks
+    - tool_call: MCP tool invocation start
+    - tool_result: MCP tool result
+    - warning: Budget or system warnings
+    - done: Stream completion with final metadata
+    - heartbeat: Keepalive ping (every 30s)
     - error: Error event
-    - final: Stream completion with final metadata
+
+    SSE Format:
+    - Each event: "event: <type>\ndata: <json>\n\n"
+    - Heartbeat: "event: heartbeat\ndata: {\"timestamp\": ...}\n\n"
+    - Auto-reconnect supported via EventSource API
 
     Args:
+        request: FastAPI request object
         prompt: User's message/prompt
         device_token: Optional device token (dtok_...)
         api_key: Verified API key
+        db: Database session
 
     Returns:
         StreamingResponse with SSE events
     """
+    import asyncio
+    from datetime import datetime
+
     # Initialize orchestrator to None for error handling
     orchestrator = None
 
@@ -911,32 +925,130 @@ async def chat_stream_endpoint(
         request_id = getattr(request.state, "request_id", "unknown")
         context_id = context_id_adhoc(request_id)
 
-        # Create async generator for SSE
+        # Create async generator for SSE with heartbeat
         async def event_generator():
-            """Generate Server-Sent Events for streaming."""
+            """
+            Generate Server-Sent Events for streaming with heartbeat.
+
+            Implements heartbeat mechanism for connection keepalive and
+            proper event typing for client consumption.
+            """
+            heartbeat_interval = 30  # Send heartbeat every 30 seconds
+            last_heartbeat = asyncio.get_event_loop().time()
+
             try:
-                async for event in orchestrator.chat(
+                # Start streaming from orchestrator
+                stream_active = True
+                orchestrator_stream = orchestrator.chat(
                     prompt=prompt,
                     context_id=context_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
                     stream=True,
-                ):
-                    # Format as SSE
-                    yield f"data: {json.dumps(event.dict())}\n\n"
+                ).__aiter__()
+
+                while stream_active:
+                    try:
+                        # Wait for next event with timeout for heartbeat
+                        event = await asyncio.wait_for(
+                            orchestrator_stream.__anext__(),
+                            timeout=1.0,  # Check every second for heartbeat
+                        )
+
+                        # Map orchestrator event types to SSE event types
+                        if event.type == "text":
+                            # Token/text chunk event
+                            yield f"event: token\ndata: {json.dumps({'content': event.data})}\n\n"
+
+                        elif event.type == "tool_call":
+                            # Tool call event (start of tool execution)
+                            yield f"event: tool_call\ndata: {json.dumps(event.data)}\n\n"
+
+                            # Also send tool_result if result is included
+                            if "result" in event.data:
+                                yield f"event: tool_result\ndata: {json.dumps({'tool': event.data.get('tool'), 'result': event.data.get('result')})}\n\n"
+
+                        elif event.type == "final":
+                            # Stream completion event
+                            # Check for budget warning
+                            if user_id:
+                                try:
+                                    user_uuid = UUID(user_id)
+                                    token_metering = get_token_metering_service()
+                                    (
+                                        over_threshold,
+                                        percent_used,
+                                        warning_level,
+                                    ) = await token_metering.check_budget(
+                                        db, user_id=user_uuid, workspace_id=workspace_id
+                                    )
+
+                                    if warning_level:
+                                        # Send warning event before done
+                                        warning_data = {
+                                            "level": warning_level,
+                                            "percent_used": percent_used,
+                                            "message": f"Budget {warning_level}: {percent_used}% of daily limit used",
+                                        }
+                                        yield f"event: warning\ndata: {json.dumps(warning_data)}\n\n"
+                                except Exception as budget_err:
+                                    logger.warning(f"Budget check failed: {budget_err}")
+
+                            # Send done event with metadata
+                            done_data = {
+                                "usage": event.data.get("usage", {}),
+                                "cache_hit": event.data.get("cache_hit", False),
+                                "request_id": request_id,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                            yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+                            stream_active = False
+
+                        else:
+                            # Unknown event type, pass through as-is
+                            yield f"data: {json.dumps(event.dict())}\n\n"
+
+                    except asyncio.TimeoutError:
+                        # Check if heartbeat is needed
+                        current_time = asyncio.get_event_loop().time()
+                        if current_time - last_heartbeat >= heartbeat_interval:
+                            # Send heartbeat event
+                            heartbeat_data = {
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "request_id": request_id,
+                            }
+                            yield f"event: heartbeat\ndata: {json.dumps(heartbeat_data)}\n\n"
+                            last_heartbeat = current_time
+
+                    except StopAsyncIteration:
+                        # Stream ended normally
+                        stream_active = False
+
             except Exception as e:
+                # Send error event
                 error_event = {
-                    "type": "error",
-                    "data": str(e),
+                    "error": str(e),
+                    "type": type(e).__name__,
+                    "request_id": request_id,
                 }
-                yield f"data: {json.dumps(error_event)}\n\n"
+                yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+
+                # Send done event to signal stream end
+                done_data = {
+                    "error": True,
+                    "request_id": request_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable Nginx buffering
+                "X-Request-ID": request_id,
             },
         )
 
