@@ -22,6 +22,7 @@ from src.middleware.device_session import OptionalDeviceSession
 from src.services.agent_orchestrator import get_agent_orchestrator
 from src.services.device_session_service import DeviceSessionService
 from src.services.thread_service import ThreadService
+from src.services.token_metering import get_token_metering_service
 from src.services.workspace_resolver import WorkspaceResolver
 from src.utils.logging import get_logger
 from src.utils.validation import context_id_adhoc, require_prefix
@@ -132,6 +133,18 @@ class ResponseMeta(BaseModel):
         ...,
         description="Unique request identifier for tracing",
         json_schema_extra={"example": "123e4567-e89b-12d3-a456-426614174000"},
+    )
+    # Budget warning fields (Issue #26)
+    budgetWarning: Optional[str] = Field(
+        None,
+        description="Warning level if approaching budget: 'warning' (80%), 'critical' (95%), 'over' (100%+)",
+        json_schema_extra={"example": "warning"},
+    )
+    budgetPercentUsed: Optional[int] = Field(
+        None,
+        description="Percentage of daily budget used (0-100+)",
+        ge=0,
+        json_schema_extra={"example": 85},
     )
 
 
@@ -726,7 +739,54 @@ async def chat_endpoint(
                 if cache_ttl is not None:
                     cache_ttl = int(cache_ttl)
 
-                # Return response with thread info
+                # Check budget and add warnings if needed (Issue #26)
+                budget_warning = None
+                budget_percent = None
+
+                # Get token metering service and check budget
+                token_metering = get_token_metering_service()
+                try:
+                    # Check budget using the user_id and workspace
+                    # Note: We're using UUID for user_id in the orchestrator
+                    import uuid
+
+                    user_uuid = (
+                        uuid.UUID(str(user_id))
+                        if user_id
+                        else uuid.UUID("00000000-0000-0000-0000-000000000000")
+                    )
+
+                    (
+                        over_threshold,
+                        percent_used,
+                        warning_level,
+                    ) = await token_metering.check_budget(
+                        db,
+                        user_id=user_uuid,
+                        workspace_id=effective_workspace,
+                    )
+
+                    if warning_level:
+                        budget_warning = warning_level
+                        budget_percent = percent_used
+
+                        # Log budget warning
+                        logger.warning(
+                            "User approaching token budget",
+                            user_id=str(user_id),
+                            workspace_id=effective_workspace,
+                            percent_used=percent_used,
+                            warning_level=warning_level,
+                        )
+                except Exception as e:
+                    # Don't fail request if budget check fails
+                    logger.error(
+                        "Failed to check user budget",
+                        user_id=str(user_id),
+                        error=str(e),
+                    )
+
+                # Return response with thread info and budget warnings
                 return ChatResponse(
                     reply=result.reply,
                     meta=ResponseMeta(
@@ -737,6 +797,8 @@ async def chat_endpoint(
                             output=result.meta.get("usage", {}).get("output_tokens", 0),
                         ),
                         requestId=request_id,
+                        budgetWarning=budget_warning,
+                        budgetPercentUsed=budget_percent,
                     ),
                     threadId=str(thread.id),
                     shareToken=share_token,

@@ -12,7 +12,7 @@ Security: All OAuth tokens are encrypted at rest using Fernet encryption.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -20,6 +20,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -1147,15 +1148,347 @@ class AgentCacheTag(Base):
         doc="Tag for grouping (e.g., notion:page:PAGE_ID)",
     )
 
-    # Relationship
+    # Relationships
     cache_entry: Mapped["AgentCache"] = relationship(
         "AgentCache",
         back_populates="tags",
-        doc="Parent cache entry",
+        doc="Associated cache entry",
+    )
+
+
+class TokenUsage(Base):
+    """
+    Token usage tracking for metering and billing.
+
+    Append-only log that tracks every request's token consumption with idempotency
+    via unique request_id constraint. Supports cache hit tracking (zero tokens)
+    and error status tracking.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        request_id: Unique request identifier for idempotency
+        user_id: User who made the request
+        workspace_id: Optional workspace context
+        device_session_id: Optional device session reference
+        thread_id: Optional thread reference
+        input_tokens: Number of input tokens consumed (0 for cache hits)
+        output_tokens: Number of output tokens generated (0 for cache hits)
+        model_name: Model used (e.g., claude-3-opus)
+        provider: Provider name (e.g., anthropic)
+        tool_calls_count: Number of tool calls made
+        cache_hit: Whether this was served from cache
+        status: Request status (ok, error, cache)
+        created_at: Timestamp of usage
+    """
+
+    __tablename__ = "token_usage"
+
+    # Primary key
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, doc="Auto-incrementing ID"
+    )
+
+    # Request tracking (unique for idempotency)
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        unique=True,
+        nullable=False,
+        doc="Unique request ID for idempotency",
+    )
+
+    # User and workspace
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="User who made the request",
+    )
+
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, doc="Optional workspace context"
+    )
+
+    # Optional references
+    device_session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("device_sessions.session_id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Optional device session reference",
+    )
+
+    thread_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("threads.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Optional thread reference",
+    )
+
+    # Token counts
+    input_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        doc="Input tokens consumed (0 for cache hits)",
+    )
+
+    output_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        doc="Output tokens generated (0 for cache hits)",
+    )
+
+    # Model and provider info
+    model_name: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, doc="Model used (e.g., claude-3-opus)"
+    )
+
+    provider: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, doc="Provider name (e.g., anthropic)"
+    )
+
+    # Additional metadata
+    tool_calls_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, doc="Number of tool calls made"
+    )
+
+    cache_hit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, doc="Whether served from cache"
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="ok",
+        doc="Request status (ok, error, cache)",
+    )
+
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        doc="Usage timestamp",
     )
 
     # Indexes
-    __table_args__ = (Index("idx_agent_cache_tags_tag", "tag"),)
+    __table_args__ = (
+        Index(
+            "idx_token_usage_user_workspace", "user_id", "workspace_id", "created_at"
+        ),
+        Index("idx_token_usage_device_session", "device_session_id", "created_at"),
+        Index("idx_token_usage_thread", "thread_id", "created_at"),
+        Index("idx_token_usage_created", "created_at"),
+        CheckConstraint(
+            "status IN ('ok', 'error', 'cache')", name="ck_token_usage_status"
+        ),
+    )
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens consumed (input + output)."""
+        return self.input_tokens + self.output_tokens
 
     def __repr__(self) -> str:
-        return f"<AgentCacheTag(key={self.cache_key[:30]}..., tag={self.tag})>"
+        return (
+            f"<TokenUsage(request={str(self.request_id)[:8]}..., "
+            f"tokens={self.total_tokens}, cache_hit={self.cache_hit}, status={self.status})>"
+        )
+
+
+class TokenUsageRollupDaily(Base):
+    """
+    Pre-aggregated daily token usage for O(1) reads.
+
+    Maintained via upserts on every request to avoid expensive aggregation queries.
+    Primary key is (user_id, workspace_id, day) for efficient lookups.
+
+    Attributes:
+        user_id: User identifier
+        workspace_id: Optional workspace (NULL for global)
+        day: UTC date for aggregation
+        input_tokens: Total input tokens for the day
+        output_tokens: Total output tokens for the day
+        request_count: Number of requests made
+        cache_hits: Number of cache hits
+        error_count: Number of errors
+        updated_at: Last update timestamp
+    """
+
+    __tablename__ = "token_usage_rollup_daily"
+
+    # Composite primary key
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+        doc="User identifier",
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        String(255),
+        primary_key=True,
+        nullable=False,
+        server_default="",
+        doc="Workspace (empty string for global)",
+    )
+
+    day: Mapped[date] = mapped_column(
+        Date, primary_key=True, doc="UTC date for aggregation"
+    )
+
+    # Aggregated metrics
+    input_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, doc="Total input tokens"
+    )
+
+    output_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, doc="Total output tokens"
+    )
+
+    request_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, doc="Number of requests"
+    )
+
+    cache_hits: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, doc="Number of cache hits"
+    )
+
+    error_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, doc="Number of errors"
+    )
+
+    # Timestamp
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        doc="Last update timestamp",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_token_rollup_day", "day"),
+        Index("idx_token_rollup_user", "user_id", "day"),
+    )
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens for the day."""
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Cache hit rate as percentage."""
+        if self.request_count == 0:
+            return 0.0
+        return (self.cache_hits / self.request_count) * 100
+
+    def __repr__(self) -> str:
+        return (
+            f"<TokenUsageRollupDaily(user={str(self.user_id)[:8]}..., "
+            f"day={self.day}, total={self.total_tokens}, requests={self.request_count})>"
+        )
+
+
+class UserTokenBudget(Base):
+    """
+    Token budget configuration per user/workspace.
+
+    Defines daily and monthly limits with configurable warning thresholds.
+    Supports soft blocking (warning only) and future hard blocking.
+
+    Attributes:
+        id: Unique budget ID
+        user_id: User this budget applies to
+        workspace_id: Optional workspace (NULL for global budget)
+        daily_limit: Daily token limit
+        monthly_limit: Monthly token limit
+        warning_threshold_percent: Percentage for warning (default 80%)
+        soft_block: Whether to only warn (true) or block (false)
+        created_at: Budget creation time
+        updated_at: Last update time
+    """
+
+    __tablename__ = "user_token_budgets"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, doc="Unique budget ID"
+    )
+
+    # User and workspace
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="User this budget applies to",
+    )
+
+    workspace_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, doc="Optional workspace (NULL for global)"
+    )
+
+    # Limits
+    daily_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1000000, doc="Daily token limit"
+    )
+
+    monthly_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30000000, doc="Monthly token limit"
+    )
+
+    # Warning configuration
+    warning_threshold_percent: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=80, doc="Warning threshold percentage"
+    )
+
+    soft_block: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, doc="Only warn, don't block"
+    )
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        doc="Creation timestamp",
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        doc="Last update timestamp",
+    )
+
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint("user_id", "workspace_id", name="uq_user_workspace_budget"),
+    )
+
+    def get_warning_level(self, usage_percent: float) -> Optional[str]:
+        """
+        Determine warning level based on usage percentage.
+
+        Returns:
+            None if below threshold
+            "warning" if >= warning_threshold_percent
+            "critical" if >= 95%
+            "over" if >= 100%
+        """
+        if usage_percent >= 100:
+            return "over"
+        elif usage_percent >= 95:
+            return "critical"
+        elif usage_percent >= self.warning_threshold_percent:
+            return "warning"
+        return None
+
+    def __repr__(self) -> str:
+        return (
+            f"<UserTokenBudget(user={str(self.user_id)[:8]}..., "
+            f"daily={self.daily_limit}, monthly={self.monthly_limit})>"
+        )
