@@ -262,6 +262,13 @@ class Settings(BaseSettings):
         ge=0,
     )
 
+    cache_invalidation_cap_default: int = Field(
+        default=100,
+        description="Max entries invalidated per write operation (safety cap)",
+        ge=1,
+        le=1000,
+    )
+
     # ===== Cache Configuration =====
     # Tools that should NEVER be cached (mutations, time-sensitive, auth operations)
     # All other tools will be cached with default TTL unless specified

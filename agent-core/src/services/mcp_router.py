@@ -1040,6 +1040,10 @@ class MCPRouter:
             labels=tags,
         )
 
+        # Add mode flag for refresh operations
+        if cache_mode == "refresh":
+            cache_meta["mode"] = "refresh"
+
         # Remove internal cache metadata from result if present
         if isinstance(result, dict):
             clean_result = {
@@ -1421,7 +1425,9 @@ class MCPRouter:
         tags.extend(resource_tags)
 
         # Perform invalidation with safety cap
-        result = await self.cache.invalidate_by_tags(tags, max_entries=100)
+        result = await self.cache.invalidate_by_tags(
+            tags, max_entries=self.settings.cache_invalidation_cap_default
+        )
 
         if result.get("invalidated", 0) > 0:
             logger.info(
