@@ -19,6 +19,7 @@ from pydantic_ai.usage import UsageLimits
 
 from src.config import Settings, get_settings
 from src.services.mcp_router import MCPRouter, get_mcp_router
+from src.services.token_metering import TokenMeteringService, get_token_metering_service
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -93,6 +94,7 @@ class AgentOrchestrator:
         self,
         router: Optional[MCPRouter] = None,
         settings: Optional[Settings] = None,
+        token_metering: Optional[TokenMeteringService] = None,
     ):
         """
         Initialize the Agent Orchestrator.
@@ -100,9 +102,11 @@ class AgentOrchestrator:
         Args:
             router: MCP Router instance for tool management
             settings: Application settings
+            token_metering: Token metering service for usage tracking
         """
         self.router = router
         self.settings = settings or get_settings()
+        self.token_metering = token_metering or get_token_metering_service()
         self.agent: Optional[Agent] = None
 
         # In-memory context storage (MVP - will move to DB in Week 3)
@@ -299,6 +303,11 @@ class AgentOrchestrator:
         """
         start_time = time.time()
 
+        # Variables to track usage for metering
+        usage = None
+        status = "ok"
+        result = None
+
         try:
             # Run the agent with current toolsets and dependencies
             result = await self.agent.run(
@@ -365,6 +374,7 @@ class AgentOrchestrator:
             return response
 
         except Exception as e:
+            status = "error"
             # Log and re-raise original exception - normalization handled at router level
             logger.error(
                 "Chat request failed",
@@ -373,6 +383,47 @@ class AgentOrchestrator:
                 error_type=type(e).__name__,
             )
             raise e
+
+        finally:
+            # Track token usage in metering service (idempotent via request_id)
+            # Only track if we have usage data (result completed)
+            if usage and deps:
+                # Get database session for metering
+                # Note: We need to handle this carefully as we're in an async context
+                from src.db.database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as db:
+                    try:
+                        # Track token usage with all available metadata
+                        await self.token_metering.track_request_tokens(
+                            db=db,
+                            request_id=uuid.UUID(request_id),
+                            user_id=uuid.UUID(deps.user_id)
+                            if deps.user_id
+                            else uuid.UUID(
+                                "00000000-0000-0000-0000-000000000000"
+                            ),  # Default user for MVP
+                            workspace_id=deps.workspace_id,
+                            device_session_id=None,  # Will be added from router later
+                            thread_id=uuid.UUID(deps.thread_id)
+                            if deps.thread_id
+                            else None,
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                            model_name=self.settings.anthropic_model,
+                            provider="anthropic",
+                            cache_hit=cache_hit,
+                            tool_calls_count=len(tool_calls) if result else 0,
+                            status=status,
+                        )
+                        await db.commit()
+                    except Exception as meter_error:
+                        # Log but don't fail the request if metering fails
+                        logger.error(
+                            "Failed to track token usage",
+                            request_id=request_id,
+                            error=str(meter_error),
+                        )
 
     async def _stream_chat(
         self,
@@ -391,6 +442,12 @@ class AgentOrchestrator:
             StreamEvent objects for each chunk of the response
         """
         start_time = time.time()
+
+        # Variables to track usage for metering (after stream completes)
+        usage = None
+        status = "ok"
+        tool_calls = []
+        cache_hit = False
 
         try:
             # Run the agent in streaming mode with dependencies
@@ -412,13 +469,15 @@ class AgentOrchestrator:
                 # After streaming completes, send tool calls
                 for msg in result.all_messages():
                     if hasattr(msg, "role") and msg.role == "tool":
+                        tool_call_data = {
+                            "tool": getattr(msg, "tool_name", "unknown"),
+                            "args": getattr(msg, "tool_args", {}),
+                            "result": msg.content,  # Full result, no placeholders
+                        }
+                        tool_calls.append(tool_call_data)
                         yield StreamEvent(
                             type="tool_call",
-                            data={
-                                "tool": getattr(msg, "tool_name", "unknown"),
-                                "args": getattr(msg, "tool_args", {}),
-                                "result": msg.content,  # Full result, no placeholders
-                            },
+                            data=tool_call_data,
                             request_id=request_id,
                         )
 
@@ -430,7 +489,6 @@ class AgentOrchestrator:
                 usage = result.usage()
 
                 # Include cache metadata if available
-                cache_hit = False
                 cache_ttl_remaining = None
                 if hasattr(deps, "cache_metadata"):
                     cache_hit = deps.cache_metadata.get("cache_hit", False)
@@ -459,7 +517,41 @@ class AgentOrchestrator:
                     total_tokens=usage.total_tokens,
                 )
 
+                # Track token usage AFTER streaming completes (when we have usage data)
+                if usage and deps:
+                    from src.db.database import AsyncSessionLocal
+
+                    async with AsyncSessionLocal() as db:
+                        try:
+                            await self.token_metering.track_request_tokens(
+                                db=db,
+                                request_id=uuid.UUID(request_id),
+                                user_id=uuid.UUID(deps.user_id)
+                                if deps.user_id
+                                else uuid.UUID("00000000-0000-0000-0000-000000000000"),
+                                workspace_id=deps.workspace_id,
+                                device_session_id=None,  # Will be added from router later
+                                thread_id=uuid.UUID(deps.thread_id)
+                                if deps.thread_id
+                                else None,
+                                input_tokens=usage.input_tokens,
+                                output_tokens=usage.output_tokens,
+                                model_name=self.settings.anthropic_model,
+                                provider="anthropic",
+                                cache_hit=cache_hit,
+                                tool_calls_count=len(tool_calls),
+                                status=status,
+                            )
+                            await db.commit()
+                        except Exception as meter_error:
+                            logger.error(
+                                "Failed to track streaming token usage",
+                                request_id=request_id,
+                                error=str(meter_error),
+                            )
+
         except Exception as e:
+            status = "error"
             # Send error event
             logger.error(
                 "Streaming chat failed",

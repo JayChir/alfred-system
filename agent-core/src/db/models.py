@@ -1148,6 +1148,13 @@ class AgentCacheTag(Base):
         doc="Tag for grouping (e.g., notion:page:PAGE_ID)",
     )
 
+    # Relationships
+    cache_entry: Mapped["AgentCache"] = relationship(
+        "AgentCache",
+        back_populates="tags",
+        doc="Associated cache entry",
+    )
+
 
 class TokenUsage(Base):
     """
