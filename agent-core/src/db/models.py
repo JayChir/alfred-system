@@ -1325,8 +1325,12 @@ class TokenUsageRollupDaily(Base):
         doc="User identifier",
     )
 
-    workspace_id: Mapped[Optional[str]] = mapped_column(
-        String(255), primary_key=True, nullable=True, doc="Workspace (NULL for global)"
+    workspace_id: Mapped[str] = mapped_column(
+        String(255),
+        primary_key=True,
+        nullable=False,
+        server_default="",
+        doc="Workspace (empty string for global)",
     )
 
     day: Mapped[date] = mapped_column(

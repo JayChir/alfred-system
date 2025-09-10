@@ -31,7 +31,7 @@ def upgrade() -> None:
     # Create token_usage table (append-only log)
     op.create_table(
         "token_usage",
-        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("request_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("workspace_id", sa.String(255), nullable=True),
@@ -42,7 +42,9 @@ def upgrade() -> None:
         sa.Column("model_name", sa.String(100), nullable=True),
         sa.Column("provider", sa.String(50), nullable=True),
         sa.Column("tool_calls_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("cache_hit", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column(
+            "cache_hit", sa.Boolean(), nullable=False, server_default=sa.text("false")
+        ),
         sa.Column("status", sa.String(10), nullable=False, server_default="ok"),
         sa.Column(
             "created_at",
@@ -50,7 +52,6 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "request_id", name="uq_token_usage_request_id"
         ),  # Idempotency
@@ -79,7 +80,7 @@ def upgrade() -> None:
     op.create_table(
         "token_usage_rollup_daily",
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("workspace_id", sa.String(255), nullable=True),
+        sa.Column("workspace_id", sa.String(255), nullable=False, server_default=""),
         sa.Column("day", sa.Date(), nullable=False),
         sa.Column("input_tokens", sa.BigInteger(), nullable=False, server_default="0"),
         sa.Column("output_tokens", sa.BigInteger(), nullable=False, server_default="0"),
@@ -126,7 +127,9 @@ def upgrade() -> None:
             nullable=False,
             server_default="80",
         ),
-        sa.Column("soft_block", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column(
+            "soft_block", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
