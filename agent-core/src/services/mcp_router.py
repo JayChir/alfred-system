@@ -347,8 +347,42 @@ class MCPRouter:
                                 tool=name,
                                 cacheable=bool(ttl),
                                 mode=cache_mode,
+                                is_write=is_denied,
                             )
-                            return await call_tool(name, tool_args)
+
+                            # Call the tool
+                            result = await call_tool(name, tool_args)
+
+                            # If this was a write operation (is_denied) and it succeeded,
+                            # invalidate related cache entries
+                            if is_denied and result is not None:
+                                try:
+                                    invalidation_result = (
+                                        await self.invalidate_after_write(
+                                            server=current_config.name,
+                                            tool=name,
+                                            args=tool_args,
+                                            user_scope=user_scope,
+                                        )
+                                    )
+
+                                    # Add invalidation metadata to result if it's a dict
+                                    if isinstance(result, dict):
+                                        result[
+                                            "_cache_invalidated"
+                                        ] = invalidation_result.get("invalidated", 0)
+                                        result[
+                                            "_cache_invalidation_capped"
+                                        ] = invalidation_result.get("capped", False)
+                                except Exception as e:
+                                    logger.error(
+                                        "Failed to invalidate cache after write",
+                                        server=current_config.name,
+                                        tool=name,
+                                        error=str(e),
+                                    )
+
+                            return result
 
                         # Generate cache key
                         key = make_cache_key(
@@ -546,13 +580,21 @@ class MCPRouter:
 
                         # Never cache auth or transport errors
                         if not is_auth_or_transport_error(result):
+                            # Build comprehensive tags for invalidation
+                            tags = self._build_cache_tags(
+                                server=current_config.name,
+                                tool=name,
+                                args=tool_args,
+                                user_scope=user_scope,
+                            )
+
                             await self.cache.set(
                                 key,
                                 result
                                 if isinstance(result, dict)
                                 else {"result": result},
                                 ttl_s=ttl,
-                                labels=[current_config.name, name],
+                                labels=tags,
                             )
                         else:
                             logger.warning(
@@ -869,7 +911,39 @@ class MCPRouter:
             result = await self._direct_call_tool(
                 server_name, tool_name, arguments, metadata=metadata
             )
-            return result, {"cacheHit": False, "cacheable": False}
+
+            # Invalidate related cache after successful write
+            invalidation_count = 0
+            if result is not None:
+                try:
+                    invalidation_result = await self.invalidate_after_write(
+                        server=server_name,
+                        tool=tool_name,
+                        args=arguments,
+                        user_scope=user_scope,
+                    )
+                    invalidation_count = invalidation_result.get("invalidated", 0)
+
+                    if invalidation_count > 0:
+                        logger.info(
+                            "Cache invalidated after write operation",
+                            server=server_name,
+                            tool=tool_name,
+                            count=invalidation_count,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Failed to invalidate cache after write",
+                        server=server_name,
+                        tool=tool_name,
+                        error=str(e),
+                    )
+
+            return result, {
+                "cacheHit": False,
+                "cacheable": False,
+                "cacheInvalidated": invalidation_count,
+            }
 
         # Determine TTL - check for overrides first, then use default
         ttl_s = None
@@ -948,6 +1022,14 @@ class MCPRouter:
                     "cacheTtlRemaining": cached_result.get("_cache_ttl_remaining_s", 0),
                 }
 
+        # Build comprehensive tags for invalidation
+        tags = self._build_cache_tags(
+            server=server_name,
+            tool=tool_name,
+            args=arguments,
+            user_scope=user_scope,
+        )
+
         # Cache miss or refresh mode - use singleflight to prevent thundering herd
         result, cache_meta = await self.cache.invoke_with_singleflight(
             key=cache_key,
@@ -955,8 +1037,12 @@ class MCPRouter:
                 server_name, tool_name, arguments, metadata=metadata
             ),
             ttl_s=ttl_s,
-            labels=[server_name, tool_name],
+            labels=tags,
         )
+
+        # Add mode flag for refresh operations
+        if cache_mode == "refresh":
+            cache_meta["mode"] = "refresh"
 
         # Remove internal cache metadata from result if present
         if isinstance(result, dict):
@@ -1215,6 +1301,144 @@ class MCPRouter:
                 consecutive_failures=status.consecutive_failures,
                 error=str(e),
             )
+
+    def _build_cache_tags(
+        self,
+        server: str,
+        tool: str,
+        args: Dict[str, Any],
+        user_scope: str,
+    ) -> List[str]:
+        """
+        Build comprehensive tags for cache entries to enable efficient invalidation.
+
+        Tags include:
+        - Server name (e.g., 'server:notion')
+        - Tool name (e.g., 'tool:notion.get_page')
+        - User/workspace scope (e.g., 'user:user123', 'workspace:ws456')
+        - Resource identifiers (e.g., 'page:PAGE123', 'issue:456')
+
+        Args:
+            server: Server name
+            tool: Tool name
+            args: Tool arguments
+            user_scope: User/workspace scope string
+
+        Returns:
+            List of tags for this cache entry
+        """
+        tags = []
+
+        # Always include server and tool tags
+        tags.append(f"server:{server}")
+        tags.append(f"tool:{server}.{tool}")
+
+        # Parse user scope (format: "user_id:workspace_id" or "global")
+        if user_scope and user_scope != "global":
+            parts = user_scope.split(":")
+            if len(parts) >= 1 and parts[0]:
+                tags.append(f"user:{parts[0]}")
+            if len(parts) >= 2 and parts[1]:
+                tags.append(f"workspace:{parts[1]}")
+
+        # Extract resource identifiers from args based on tool patterns
+        resource_tags = self._extract_resource_tags(server, tool, args)
+        tags.extend(resource_tags)
+
+        return tags
+
+    def _extract_resource_tags(
+        self, server: str, tool: str, args: Dict[str, Any]
+    ) -> List[str]:
+        """
+        Extract resource-specific tags from tool arguments.
+
+        Args:
+            server: Server name
+            tool: Tool name
+            args: Tool arguments
+
+        Returns:
+            List of resource tags (e.g., ['page:PAGE123', 'database:DB456'])
+        """
+        tags = []
+
+        # Notion resource patterns
+        if server == "notion":
+            if page_id := args.get("page_id"):
+                tags.append(f"page:{page_id}")
+            if database_id := args.get("database_id"):
+                tags.append(f"database:{database_id}")
+            if block_id := args.get("block_id"):
+                tags.append(f"block:{block_id}")
+            if user_id := args.get("user_id"):
+                tags.append(f"notion_user:{user_id}")
+
+        # GitHub resource patterns
+        elif server == "github":
+            if repo := args.get("repo"):
+                tags.append(f"repo:{repo}")
+            if issue_number := args.get("issue_number"):
+                tags.append(f"issue:{issue_number}")
+            if pr_number := args.get("pull_number"):
+                tags.append(f"pr:{pr_number}")
+            if owner := args.get("owner"):
+                tags.append(f"owner:{owner}")
+
+        return tags
+
+    async def invalidate_after_write(
+        self,
+        server: str,
+        tool: str,
+        args: Dict[str, Any],
+        user_scope: str,
+    ) -> Dict[str, Any]:
+        """
+        Invalidate related cache entries after a successful write operation.
+
+        Args:
+            server: Server name
+            tool: Tool name that performed the write
+            args: Tool arguments
+            user_scope: User/workspace scope
+
+        Returns:
+            Invalidation result dictionary
+        """
+        # Build tags for what to invalidate
+        tags = []
+
+        # Always include server tag to invalidate related reads
+        tags.append(f"server:{server}")
+
+        # Add user/workspace scope to prevent cross-user invalidation
+        if user_scope and user_scope != "global":
+            parts = user_scope.split(":")
+            if len(parts) >= 1 and parts[0]:
+                tags.append(f"user:{parts[0]}")
+            if len(parts) >= 2 and parts[1]:
+                tags.append(f"workspace:{parts[1]}")
+
+        # Add resource-specific tags
+        resource_tags = self._extract_resource_tags(server, tool, args)
+        tags.extend(resource_tags)
+
+        # Perform invalidation with safety cap
+        result = await self.cache.invalidate_by_tags(
+            tags, max_entries=self.settings.cache_invalidation_cap_default
+        )
+
+        if result.get("invalidated", 0) > 0:
+            logger.info(
+                "Cache invalidated after write",
+                server=server,
+                tool=tool,
+                tags=tags,
+                count=result["invalidated"],
+            )
+
+        return result
 
     async def shutdown(self) -> None:
         """
