@@ -182,11 +182,20 @@ class RateLimitingMiddleware(BaseHTTPMiddleware):
         # Check if we should trust proxy headers
         # This is a simple heuristic - in production, you might want to
         # explicitly configure trusted proxy IPs
-        trust_proxy = hasattr(request.app, "middleware_stack") and any(
-            "TrustedHostMiddleware" in str(middleware)
-            or "ProxyHeadersMiddleware" in str(middleware)
-            for middleware in getattr(request.app, "middleware_stack", [])
-        )
+        try:
+            middleware_stack = getattr(request.app, "middleware_stack", [])
+            # Handle case where middleware_stack might not be iterable
+            if middleware_stack and hasattr(middleware_stack, "__iter__"):
+                trust_proxy = any(
+                    "TrustedHostMiddleware" in str(middleware)
+                    or "ProxyHeadersMiddleware" in str(middleware)
+                    for middleware in middleware_stack
+                )
+            else:
+                trust_proxy = False
+        except (TypeError, AttributeError):
+            # Fallback if middleware inspection fails
+            trust_proxy = False
 
         if trust_proxy:
             # Trust X-Forwarded-For header

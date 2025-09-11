@@ -895,8 +895,8 @@ async def rate_limiter_health() -> Dict[str, Any]:
                 "default_burst": rate_limiter.default_config.burst_capacity,
                 "max_buckets": rate_limiter.max_buckets,
                 "cleanup_interval": rate_limiter.cleanup_interval,
-                "route_overrides": len(rate_limiter.route_overrides),
-                "key_overrides": len(rate_limiter.key_overrides),
+                "route_overrides": len(rate_limiter.route_configs),
+                "key_overrides": len(rate_limiter.key_configs),
             },
             "memory_usage": {
                 "bucket_count": bucket_stats.get("active_buckets", 0),
@@ -912,7 +912,7 @@ async def rate_limiter_health() -> Dict[str, Any]:
                     "burst": config.burst_capacity,
                     "enabled": config.enabled,
                 }
-                for route, config in rate_limiter.route_overrides.items()
+                for route, config in rate_limiter.route_configs.items()
             },
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
