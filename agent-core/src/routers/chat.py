@@ -945,7 +945,7 @@ async def chat_stream_endpoint(
             - Single done event with comprehensive metadata
             """
             heartbeat_interval = 30  # Send heartbeat every 30 seconds
-            last_heartbeat = asyncio.get_event_loop().time()
+            last_heartbeat = asyncio.get_running_loop().time()
 
             # Track accumulated usage for final done event
             total_usage = {"input": 0, "output": 0}
@@ -1052,12 +1052,19 @@ async def chat_stream_endpoint(
                                 if isinstance(event.data, dict)
                                 else {}
                             )
-                            total_usage["input"] += usage.get("input", 0)
-                            total_usage["output"] += usage.get("output", 0)
+                            # Accept both orchestrator shape (input_tokens/output_tokens) and test shape (input/output)
+                            input_used = usage.get(
+                                "input_tokens", usage.get("input", 0)
+                            )
+                            output_used = usage.get(
+                                "output_tokens", usage.get("output", 0)
+                            )
+                            total_usage["input"] += input_used
+                            total_usage["output"] += output_used
 
-                            # Track cache hit
+                            # Track cache hit (orchestrator uses cacheHit, not cache_hit)
                             if isinstance(event.data, dict) and event.data.get(
-                                "cache_hit", False
+                                "cacheHit", False
                             ):
                                 cache_hits += 1
 
@@ -1137,7 +1144,7 @@ async def chat_stream_endpoint(
 
                     except asyncio.TimeoutError:
                         # Check if heartbeat is needed
-                        current_time = asyncio.get_event_loop().time()
+                        current_time = asyncio.get_running_loop().time()
                         if current_time - last_heartbeat >= heartbeat_interval:
                             # Send lightweight comment-style heartbeat
                             yield sse_heartbeat()

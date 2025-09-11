@@ -133,7 +133,7 @@ def truncate_tool_data(
         1003  # 1000 chars + "..."
     """
     if fields_to_truncate is None:
-        fields_to_truncate = ["result", "output", "content", "response", "data"]
+        fields_to_truncate = ["result", "output", "content", "response"]
 
     # Create a copy to avoid modifying original
     result = data.copy()
