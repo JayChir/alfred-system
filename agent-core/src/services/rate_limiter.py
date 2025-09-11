@@ -106,7 +106,17 @@ class RateLimiterService:
 
         # Background cleanup task
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._lock = asyncio.Lock()  # Single async lock for all operations
+
+        # Fine-grained locks keyed by bucket for better concurrency
+        self._locks: Dict[str, asyncio.Lock] = {}
+
+        # Simple counters for health and observability
+        self._requests_allowed = 0
+        self._requests_blocked = 0
+        self._cleanup_operations = 0
+        self._buckets_cleaned_total = 0
+        self._last_cleanup_time: Optional[float] = None
+
         self._setup_default_route_policies()
 
     def _setup_default_route_policies(self):
@@ -204,7 +214,7 @@ class RateLimiterService:
                 logger.error("Failed to parse key overrides", error=str(e))
 
     async def check_rate_limit(
-        self, identifier: str, route: str = None
+        self, identifier: str, route: str | None = None
     ) -> tuple[bool, float, Dict]:
         """
         Check if request from identifier is allowed.
@@ -216,19 +226,23 @@ class RateLimiterService:
         Returns:
             tuple[bool, float, Dict]: (allowed, retry_after_seconds, metadata)
         """
-        async with self._lock:
-            # Get appropriate configuration
-            config = self._get_config_for_route_and_key(identifier, route)
+        # Resolve configuration and create stable bucket key per (identifier, route)
+        config, route_key = self._resolve_config_and_route_key(identifier, route)
+        bucket_key = f"{identifier}|{route_key}"
 
-            if not config.enabled:
-                return (
-                    True,
-                    0.0,
-                    {"rate_limited": False, "reason": "disabled", "route": route},
-                )
+        if not config.enabled:
+            return (
+                True,
+                0.0,
+                {"rate_limited": False, "reason": "disabled", "route": route},
+            )
 
-            # Create or get bucket for this identifier
-            if identifier not in self.buckets:
+        # Per-bucket lock to avoid global serialization
+        lock = self._locks.setdefault(bucket_key, asyncio.Lock())
+
+        async with lock:
+            # Create or get bucket for this identifier+route combination
+            if bucket_key not in self.buckets:
                 # Implement LRU eviction if approaching max buckets
                 if len(self.buckets) >= self.max_buckets:
                     oldest_key = min(
@@ -241,14 +255,14 @@ class RateLimiterService:
                         bucket_count=len(self.buckets),
                     )
 
-                # Create new leaky bucket
+                # Create new leaky bucket with route-specific configuration
                 leak_rate = config.requests_per_minute / 60.0  # Convert to per-second
-                self.buckets[identifier] = LeakyBucket(
+                self.buckets[bucket_key] = LeakyBucket(
                     capacity=float(config.burst_capacity), leak_rate=leak_rate
                 )
 
             # Check bucket for request allowance
-            bucket = self.buckets[identifier]
+            bucket = self.buckets[bucket_key]
             allowed, retry_after = bucket.allow_request()
 
             # Prepare response metadata
@@ -262,7 +276,7 @@ class RateLimiterService:
                 "route": route,
             }
 
-            # Log rate limit events for monitoring
+            # Log rate limit events for monitoring and update counters
             if not allowed:
                 logger.warning(
                     "Rate limit exceeded",
@@ -271,6 +285,7 @@ class RateLimiterService:
                     retry_after=retry_after,
                     limit=config.requests_per_minute,
                 )
+                self._requests_blocked += 1
             else:
                 logger.debug(
                     "Rate limit check passed",
@@ -278,11 +293,12 @@ class RateLimiterService:
                     route=route,
                     remaining=metadata["remaining"],
                 )
+                self._requests_allowed += 1
 
             return allowed, retry_after, metadata
 
     def _get_config_for_route_and_key(
-        self, identifier: str, route: str = None
+        self, identifier: str, route: str | None = None
     ) -> RateLimitConfig:
         """
         Get rate limit configuration with precedence order:
@@ -307,6 +323,56 @@ class RateLimiterService:
 
         # 4. Default configuration
         return self.default_config
+
+    def _resolve_config_and_route_key(
+        self, identifier: str, route: str | None
+    ) -> tuple[RateLimitConfig, str]:
+        """
+        Resolve configuration and route key for bucket isolation.
+
+        Returns:
+            tuple[RateLimitConfig, str]: (config, route_key_for_bucket)
+        """
+        # Key override wins regardless of route
+        if identifier in self.key_configs:
+            return self.key_configs[identifier], "key-override"
+
+        if route:
+            # Exact route match
+            if route in self.route_configs:
+                return self.route_configs[route], route
+            # Route prefix matching
+            for route_pattern, cfg in self.route_configs.items():
+                if route.startswith(route_pattern):
+                    return cfg, route_pattern
+
+        return self.default_config, "default"
+
+    def get_service_stats(self) -> Dict:
+        """
+        Get service statistics for health monitoring.
+
+        Returns:
+            Dict: Service statistics including request counts and performance metrics
+        """
+        return {
+            "requests_allowed": self._requests_allowed,
+            "requests_blocked": self._requests_blocked,
+            "cleanup_operations": self._cleanup_operations,
+            "last_cleanup_time": self._last_cleanup_time,
+            "memory_pressure_high": len(self.buckets) > int(self.max_buckets * 0.9),
+            "buckets_cleaned_total": self._buckets_cleaned_total,
+            "cleanup_failures": 0,  # Track cleanup failures in future iterations
+        }
+
+    def get_bucket_stats(self) -> Dict:
+        """
+        Get bucket statistics for health monitoring.
+
+        Returns:
+            Dict: Bucket usage statistics
+        """
+        return {"active_buckets": len(self.buckets)}
 
     def _safe_log_identifier(self, identifier: str) -> str:
         """
@@ -337,23 +403,31 @@ class RateLimiterService:
         """Remove buckets that haven't been used recently."""
         cutoff_time = monotonic() - (self.cleanup_interval * 2)  # 2x cleanup interval
 
-        async with self._lock:
-            expired_keys = [
-                key
-                for key, bucket in self.buckets.items()
-                if bucket.last_update < cutoff_time
-            ]
+        # Note: We don't use a global lock here to avoid blocking active requests
+        # Instead, we collect expired keys and delete them individually
+        expired_keys = [
+            key
+            for key, bucket in self.buckets.items()
+            if bucket.last_update < cutoff_time
+        ]
 
-            for key in expired_keys:
+        # Remove expired buckets and clean up their locks
+        for key in expired_keys:
+            if key in self.buckets:
                 del self.buckets[key]
+            if key in self._locks:
+                del self._locks[key]
 
-            if expired_keys:
-                logger.info(
-                    "Rate limiter bucket cleanup completed",
-                    expired_count=len(expired_keys),
-                    remaining_buckets=len(self.buckets),
-                    cleanup_interval=self.cleanup_interval,
-                )
+        if expired_keys:
+            logger.info(
+                "Rate limiter bucket cleanup completed",
+                expired_count=len(expired_keys),
+                remaining_buckets=len(self.buckets),
+                cleanup_interval=self.cleanup_interval,
+            )
+            self._cleanup_operations += 1
+            self._last_cleanup_time = monotonic()
+            self._buckets_cleaned_total += len(expired_keys)
 
 
 def hash_api_key(raw_key: str) -> str:

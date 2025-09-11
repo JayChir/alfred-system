@@ -241,12 +241,7 @@ app = FastAPI(
 )
 
 
-# Add structured logging middleware
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
-
-# Add rate limiting middleware (after logging, before CORS)
-
+# Configure rate limiter service before adding middleware
 rate_limiter_service = get_rate_limiter_service()
 
 # Configure rate limiter service from settings
@@ -266,12 +261,10 @@ rate_limiter_service.load_overrides_from_json(
 # Store service on app state for health checks
 app.state.rate_limiter = rate_limiter_service
 
-# Add the middleware
-RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
-app.add_middleware(RateLimitingMiddleware)
+# Add middleware in reverse execution order (Starlette runs last-added first)
+# Target execution order: Logging → RateLimiting → CORS → routes
 
-# CORS configuration from environment settings
-# Convert AnyHttpUrl objects to strings for FastAPI
+# 1. Add CORS middleware (runs third, outermost before routes)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -281,6 +274,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# 2. Add rate limiting middleware (runs second, after logging)
+RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
+app.add_middleware(RateLimitingMiddleware)
+
+# 3. Add structured logging middleware (runs first, innermost)
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
 
 
 # Custom exception handlers for structured errors
