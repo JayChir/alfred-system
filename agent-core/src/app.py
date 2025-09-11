@@ -19,7 +19,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Settings, get_settings
 from src.middleware.logging import LoggingMiddleware, PerformanceLoggingMiddleware
+from src.middleware.rate_limiting import create_rate_limiting_middleware
 from src.routers import chat, device, health
+from src.services.rate_limiter import get_rate_limiter_service
 from src.utils.logging import configure_logging, get_logger
 
 
@@ -177,6 +179,19 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("Background token refresh service disabled by configuration")
 
+        # Initialize rate limiter service
+        try:
+            await app.state.rate_limiter.start()
+            logger.info("Rate limiter service started successfully")
+        except Exception as rate_limiter_e:
+            logger.error(
+                "Failed to start rate limiter service",
+                error=str(rate_limiter_e),
+                error_type=type(rate_limiter_e).__name__,
+            )
+            # Continue without rate limiting - requests will be allowed through
+            logger.warning("Application starting without rate limiting")
+
     except Exception as e:
         logger.error(
             "Failed to initialize MCP services during startup",
@@ -193,7 +208,12 @@ async def lifespan(app: FastAPI):
 
     # Clean shutdown of all services
     try:
-        # Stop background token refresh service first (Phase 4 - Issue #16)
+        # Stop rate limiter service first
+        if hasattr(app.state, "rate_limiter"):
+            await app.state.rate_limiter.stop()
+            logger.info("Rate limiter service shutdown complete")
+
+        # Stop background token refresh service (Phase 4 - Issue #16)
         if token_refresh_service:
             await token_refresh_service.stop()
             logger.info("Background token refresh service shutdown complete")
@@ -224,6 +244,31 @@ app = FastAPI(
 # Add structured logging middleware
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
+
+# Add rate limiting middleware (after logging, before CORS)
+
+rate_limiter_service = get_rate_limiter_service()
+
+# Configure rate limiter service from settings
+rate_limiter_service.default_config.requests_per_minute = (
+    settings.rate_limit_default_rpm
+)
+rate_limiter_service.default_config.burst_capacity = settings.rate_limit_default_burst
+rate_limiter_service.default_config.enabled = settings.rate_limiting_enabled
+rate_limiter_service.max_buckets = settings.rate_limit_max_buckets
+rate_limiter_service.cleanup_interval = settings.rate_limit_cleanup_interval
+
+# Load JSON overrides from configuration
+rate_limiter_service.load_overrides_from_json(
+    settings.rate_limit_route_overrides, settings.rate_limit_key_overrides
+)
+
+# Store service on app state for health checks
+app.state.rate_limiter = rate_limiter_service
+
+# Add the middleware
+RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
+app.add_middleware(RateLimitingMiddleware)
 
 # CORS configuration from environment settings
 # Convert AnyHttpUrl objects to strings for FastAPI

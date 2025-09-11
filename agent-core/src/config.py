@@ -365,12 +365,55 @@ class Settings(BaseSettings):
     )
 
     # ===== Rate Limiting (Week 4) =====
-    rate_limit_requests: int = Field(
-        default=100, description="Maximum requests per window", ge=1
+    rate_limiting_enabled: bool = Field(
+        default=True, description="Enable global rate limiting"
     )
 
-    rate_limit_window: int = Field(
-        default=60, description="Rate limit window in seconds", ge=1
+    rate_limit_default_rpm: int = Field(
+        default=60,
+        description="Default requests per minute limit",
+        ge=1,
+        le=10000,
+    )
+
+    rate_limit_default_burst: int = Field(
+        default=10,
+        description="Default burst capacity (leaky bucket size)",
+        ge=1,
+        le=100,
+    )
+
+    rate_limit_max_buckets: int = Field(
+        default=10000,
+        description="Maximum rate limit buckets to prevent DoS",
+        ge=100,
+        le=100000,
+    )
+
+    rate_limit_cleanup_interval: int = Field(
+        default=300,
+        description="Bucket cleanup interval in seconds",
+        ge=30,
+        le=3600,
+    )
+
+    # JSON configuration for complex overrides
+    rate_limit_route_overrides: str = Field(
+        default="{}",
+        description="Per-route rate limits as JSON (route -> {requests_per_minute, burst_capacity})",
+    )
+
+    rate_limit_key_overrides: str = Field(
+        default="{}",
+        description="Per-API-key rate limits as JSON (hashed_key -> {requests_per_minute, burst_capacity})",
+    )
+
+    # Multi-process deployment awareness
+    web_concurrency: int = Field(
+        default=1,
+        description="Number of worker processes (affects effective rate limits)",
+        ge=1,
+        le=20,
     )
 
     # ===== Validators =====
@@ -441,6 +484,67 @@ class Settings(BaseSettings):
                 "Generated new JWT secret - save this in .env for persistence"
             )
             return secret
+        return v
+
+    @field_validator("rate_limit_route_overrides", "rate_limit_key_overrides")
+    @classmethod
+    def validate_rate_limit_json_config(cls, v: str) -> str:
+        """Validate JSON configuration for rate limit overrides."""
+        if not v or v == "{}":
+            return v
+
+        try:
+            config = json.loads(v)
+            if not isinstance(config, dict):
+                raise ValueError("Configuration must be a JSON object")
+
+            # Validate structure
+            for key, limits in config.items():
+                if not isinstance(limits, dict):
+                    raise ValueError(f"Override for '{key}' must be an object")
+
+                # Validate required/optional fields
+                if "requests_per_minute" in limits:
+                    rpm = limits["requests_per_minute"]
+                    if not isinstance(rpm, int) or rpm < 1 or rpm > 10000:
+                        raise ValueError(
+                            f"Invalid requests_per_minute for '{key}': {rpm}"
+                        )
+
+                if "burst_capacity" in limits:
+                    burst = limits["burst_capacity"]
+                    if not isinstance(burst, int) or burst < 1 or burst > 100:
+                        raise ValueError(f"Invalid burst_capacity for '{key}': {burst}")
+
+                if "enabled" in limits:
+                    enabled = limits["enabled"]
+                    if not isinstance(enabled, bool):
+                        raise ValueError(f"Invalid enabled flag for '{key}': {enabled}")
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON configuration: {e}") from e
+        except (ValueError, KeyError) as e:
+            raise ValueError(f"Invalid rate limit configuration: {e}") from e
+
+        return v
+
+    @field_validator("web_concurrency")
+    @classmethod
+    def warn_multiprocess_rate_limiting(cls, v: int, info) -> int:
+        """Warn about rate limiting implications with multiple workers."""
+        # Get rate_limiting_enabled from the data being validated
+        rate_limiting_enabled = info.data.get("rate_limiting_enabled", True)
+
+        if v > 1 and rate_limiting_enabled:
+            import warnings
+
+            warnings.warn(
+                f"WEB_CONCURRENCY={v} with memory-based rate limiting. "
+                "Effective limits will be multiplied by worker count. "
+                "Consider Redis backend for multi-process deployment.",
+                UserWarning,
+                stacklevel=2,
+            )
         return v
 
     # ===== Pydantic Config =====
