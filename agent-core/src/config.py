@@ -25,6 +25,30 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 logger = structlog.get_logger(__name__)
 
 
+def parse_string_list(v: Any) -> List[str]:
+    """
+    Parse string lists from various input formats.
+
+    Supports:
+    - Native Python list (from code/tests)
+    - JSON array string: '["header1", "header2"]'
+    - Comma-separated string: 'header1,header2'
+    - Empty string or None: returns empty list
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        # Handle JSON array format
+        if s.startswith("["):
+            return json.loads(s)
+        # Parse comma-separated values
+        return [item.strip() for item in s.split(",") if item.strip()]
+    return v
+
+
 def parse_cors(v: Any) -> List[str]:
     """
     Parse CORS origins from various input formats.
@@ -414,6 +438,141 @@ class Settings(BaseSettings):
         description="Number of worker processes (affects effective rate limits)",
         ge=1,
         le=20,
+    )
+
+    # ===== Production Hardening (Issue #31) =====
+
+    # Timeout Configuration
+    request_timeout_seconds: int = Field(
+        default=30,
+        description="Max request processing time (excludes SSE)",
+        ge=5,
+        le=300,
+    )
+
+    keepalive_timeout_seconds: int = Field(
+        default=5,
+        description="HTTP keep-alive timeout",
+        ge=1,
+        le=60,
+    )
+
+    anthropic_timeout_seconds: int = Field(
+        default=60,
+        description="Anthropic API timeout",
+        ge=10,
+        le=300,
+    )
+
+    mcp_timeout_seconds: int = Field(
+        default=30,
+        description="MCP server timeout",
+        ge=5,
+        le=120,
+    )
+
+    # SSE streaming timeout (separate from request timeout)
+    sse_max_duration_minutes: int = Field(
+        default=15,
+        description="Maximum SSE streaming duration in minutes",
+        ge=5,
+        le=60,
+    )
+
+    # Size Limits
+    max_request_size_mb: int = Field(
+        default=10,
+        description="Max request body size in MB",
+        ge=1,
+        le=100,
+    )
+
+    max_chat_history_messages: int = Field(
+        default=100,
+        description="Max chat history length",
+        ge=1,
+        le=1000,
+    )
+
+    max_message_content_kb: int = Field(
+        default=100,
+        description="Max individual message size in KB",
+        ge=1,
+        le=1000,
+    )
+
+    max_tool_args_kb: int = Field(
+        default=50,
+        description="Max tool arguments size in KB",
+        ge=1,
+        le=500,
+    )
+
+    # CORS Configuration (Enhanced)
+    cors_allow_credentials: bool = Field(
+        default=True,
+        description="Allow credentials in CORS requests",
+    )
+
+    cors_allow_methods: Annotated[
+        List[str], BeforeValidator(parse_string_list)
+    ] = Field(
+        default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        description="Allowed HTTP methods for CORS",
+    )
+
+    cors_allow_headers: Annotated[
+        List[str], BeforeValidator(parse_string_list)
+    ] = Field(
+        default=["Content-Type", "Authorization", "X-Request-ID"],
+        description="Allowed headers for CORS (never use * with credentials)",
+    )
+
+    cors_max_age: int = Field(
+        default=86400,
+        description="CORS preflight cache time in seconds",
+        ge=0,
+        le=86400,
+    )
+
+    # Security Headers
+    security_headers_enabled: bool = Field(
+        default=True,
+        description="Enable security headers middleware",
+    )
+
+    hsts_enabled: bool = Field(
+        default=False,
+        description="Enable HSTS (only for HTTPS production)",
+    )
+
+    csp_enabled: bool = Field(
+        default=True,
+        description="Enable Content Security Policy",
+    )
+
+    csp_report_only: bool = Field(
+        default=True,
+        description="CSP in report-only mode (recommended for initial deployment)",
+    )
+
+    # Trusted Host Configuration (for proxy headers)
+    trusted_hosts: Annotated[List[str], BeforeValidator(parse_string_list)] = Field(
+        default=["*"],
+        description="Trusted hosts (use specific domains in production)",
+    )
+
+    forwarded_allow_ips: Annotated[
+        List[str], BeforeValidator(parse_string_list)
+    ] = Field(
+        default=["127.0.0.1", "::1"],
+        description="IPs allowed to send proxy headers",
+    )
+
+    # Development/Production Feature Flags
+    dev_mode_relaxed_security: bool = Field(
+        default=True,
+        description="Relax some security settings in development",
     )
 
     # ===== Validators =====
