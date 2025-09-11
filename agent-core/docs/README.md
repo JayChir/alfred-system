@@ -5,6 +5,7 @@
 ### Core Documentation
 - [Database Schema & ERD](./database-schema.md) - Complete database design with entity relationships
 - [Cache Policy & TTL Strategy](./cache-policy.md) - Cache key specification, TTL policies, and invalidation patterns
+- [Database Maintenance](./database-maintenance.md) - PostgreSQL operations, Docker deployment, backup & monitoring
 
 ### Implementation Guides
 - [Context Strategy](./context-strategy-v1.md) - Token optimization and context management
@@ -14,7 +15,7 @@
 ### Operational Documentation
 - **Security & Encryption** - Token storage, Fernet encryption, key rotation (see Database Schema)
 - **Cache Operations** - Runtime TTL overrides, invalidation strategies (see Cache Policy)
-- **Database Maintenance** - PostgreSQL tuning, vacuum settings, index optimization
+- **Database Maintenance** - PostgreSQL tuning, vacuum settings, index optimization (see Database Maintenance)
 
 ## 🔗 Quick Reference
 

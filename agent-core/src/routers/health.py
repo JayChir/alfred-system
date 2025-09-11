@@ -798,3 +798,185 @@ async def device_sessions_health() -> Dict[str, Any]:
             },
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
+
+
+@router.get(
+    "/healthz/rate-limiter",
+    response_model=Dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    summary="Rate limiter service health",
+    description="Returns health status and metrics for the rate limiting service",
+    response_description="Rate limiter service health and operational metrics",
+)
+async def rate_limiter_health() -> Dict[str, Any]:
+    """
+    Rate limiter service health check endpoint for Issue #30.
+
+    Shows comprehensive health status of the rate limiting service:
+    - Service running status and configuration
+    - Active rate limit buckets and their usage
+    - Request blocking statistics and efficiency metrics
+    - Per-route policy configuration and override status
+    - Memory usage and cleanup operation status
+
+    This endpoint enables monitoring of the leaky bucket rate limiting implementation.
+
+    Returns:
+        Dict containing rate limiter service health and operational metrics
+
+    Example response:
+        {
+            "status": "healthy",
+            "service_enabled": true,
+            "active_buckets": 15,
+            "stats": {
+                "requests_allowed": 12847,
+                "requests_blocked": 23,
+                "block_rate": 0.0018,
+                "cleanup_operations": 5
+            },
+            "configuration": {
+                "default_rpm": 60,
+                "default_burst": 10,
+                "max_buckets": 10000,
+                "route_overrides": 2,
+                "key_overrides": 1
+            },
+            "memory_usage": {
+                "bucket_count": 15,
+                "memory_pressure": "low",
+                "last_cleanup": "2024-01-20T15:30:45.123Z"
+            }
+        }
+    """
+    try:
+        # Import here to avoid circular dependency during startup
+        from src.services.rate_limiter import get_rate_limiter_service
+
+        # Get the rate limiter service instance
+        rate_limiter = get_rate_limiter_service()
+
+        # Get service statistics and health metrics
+        service_stats = rate_limiter.get_service_stats()
+        bucket_stats = rate_limiter.get_bucket_stats()
+
+        # Determine overall health status based on service state
+        health_status = "healthy"
+        if not rate_limiter.default_config.enabled:
+            health_status = "disabled"
+        elif service_stats.get("memory_pressure_high", False):
+            health_status = "warning"  # High memory usage
+        elif service_stats.get("cleanup_failures", 0) > 5:
+            health_status = "degraded"  # Cleanup issues
+        elif bucket_stats.get("active_buckets", 0) > rate_limiter.max_buckets * 0.9:
+            health_status = "warning"  # Approaching bucket limit
+
+        # Calculate blocking efficiency metrics
+        total_requests = service_stats.get("requests_allowed", 0) + service_stats.get(
+            "requests_blocked", 0
+        )
+        block_rate = (
+            service_stats.get("requests_blocked", 0) / max(total_requests, 1)
+        ) * 100
+
+        return {
+            "status": health_status,
+            "service_enabled": rate_limiter.default_config.enabled,
+            "active_buckets": bucket_stats.get("active_buckets", 0),
+            "stats": {
+                "requests_allowed": service_stats.get("requests_allowed", 0),
+                "requests_blocked": service_stats.get("requests_blocked", 0),
+                "block_rate_percent": round(block_rate, 3),
+                "cleanup_operations": service_stats.get("cleanup_operations", 0),
+                "total_requests": total_requests,
+            },
+            "configuration": {
+                "default_rpm": rate_limiter.default_config.requests_per_minute,
+                "default_burst": rate_limiter.default_config.burst_capacity,
+                "max_buckets": rate_limiter.max_buckets,
+                "cleanup_interval": rate_limiter.cleanup_interval,
+                "route_overrides": len(rate_limiter.route_configs),
+                "key_overrides": len(rate_limiter.key_configs),
+            },
+            "memory_usage": {
+                "bucket_count": bucket_stats.get("active_buckets", 0),
+                "memory_pressure": "high"
+                if service_stats.get("memory_pressure_high")
+                else "normal",
+                "last_cleanup": service_stats.get("last_cleanup_time"),
+                "buckets_cleaned": service_stats.get("buckets_cleaned_total", 0),
+            },
+            "route_policies": {
+                route: {
+                    "rpm": config.requests_per_minute,
+                    "burst": config.burst_capacity,
+                    "enabled": config.enabled,
+                }
+                for route, config in rate_limiter.route_configs.items()
+            },
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except ImportError:
+        # Rate limiter service not available (should not happen in normal operation)
+        return {
+            "status": "unavailable",
+            "service_enabled": False,
+            "message": "Rate limiter service not initialized",
+            "active_buckets": 0,
+            "stats": {
+                "requests_allowed": 0,
+                "requests_blocked": 0,
+                "block_rate_percent": 0,
+                "cleanup_operations": 0,
+                "total_requests": 0,
+            },
+            "configuration": {
+                "default_rpm": 0,
+                "default_burst": 0,
+                "max_buckets": 0,
+                "cleanup_interval": 0,
+                "route_overrides": 0,
+                "key_overrides": 0,
+            },
+            "memory_usage": {
+                "bucket_count": 0,
+                "memory_pressure": "unknown",
+                "last_cleanup": None,
+                "buckets_cleaned": 0,
+            },
+            "route_policies": {},
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except Exception as e:
+        logger.error("Failed to get rate limiter health status", error=str(e))
+        return {
+            "status": "error",
+            "service_enabled": False,
+            "error": str(e),
+            "active_buckets": 0,
+            "stats": {
+                "requests_allowed": 0,
+                "requests_blocked": 0,
+                "block_rate_percent": 0,
+                "cleanup_operations": 0,
+                "total_requests": 0,
+            },
+            "configuration": {
+                "default_rpm": 0,
+                "default_burst": 0,
+                "max_buckets": 0,
+                "cleanup_interval": 0,
+                "route_overrides": 0,
+                "key_overrides": 0,
+            },
+            "memory_usage": {
+                "bucket_count": 0,
+                "memory_pressure": "error",
+                "last_cleanup": None,
+                "buckets_cleaned": 0,
+            },
+            "route_policies": {},
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }
