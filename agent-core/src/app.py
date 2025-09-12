@@ -265,46 +265,44 @@ rate_limiter_service.load_overrides_from_json(
 # Store service on app state for health checks
 app.state.rate_limiter = rate_limiter_service
 
-# Add middleware in reverse execution order (Starlette runs last-added first)
-# Target execution order: Logging → GZip → CORS → Timeout → RateLimit → SizeLimit → SecurityHeaders → routes
+"""
+Add middleware in reverse of desired execution order (Starlette runs last-added first).
+Desired execution: Logging → GZip → CORS → Timeout → RateLimit → SizeLimit → SecurityHeaders → routes
+So we ADD in this order: SecurityHeaders, SizeLimit, RateLimit, Timeout, CORS, GZip, Logging.
+"""
 
-# 1. Add performance and structured logging (runs first, logs all requests)
-app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
-app.add_middleware(LoggingMiddleware)
+# 7. Security headers (closest to routes)
+SecurityHeadersMiddleware = create_security_headers_middleware(settings)
+app.add_middleware(SecurityHeadersMiddleware)
 
-# 2. Add SSE-safe GZip compression (runs after logging, before CORS)
-# Excludes SSE endpoints to prevent buffering issues
-app.add_middleware(SSESafeGZipMiddleware, minimum_size=500, compresslevel=6)
+# 6. Request size limits
+SizeLimitMiddleware = create_size_limit_middleware(settings)
+app.add_middleware(SizeLimitMiddleware)
 
-# 3. Add enhanced CORS middleware (never use allow_headers=["*"] with credentials)
+# 5. Rate limiting
+RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
+app.add_middleware(RateLimitingMiddleware)
+
+# 4. Timeout with SSE exemption
+TimeoutMiddleware = create_timeout_middleware(settings)
+app.add_middleware(TimeoutMiddleware)
+
+# 3. CORS (explicit headers, with credentials)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[str(origin) for origin in settings.cors_origins],
     allow_credentials=settings.cors_allow_credentials,
     allow_methods=settings.cors_allow_methods,
-    allow_headers=settings.cors_allow_headers,  # Explicit header enumeration
+    allow_headers=settings.cors_allow_headers,
     max_age=settings.cors_max_age,
 )
 
-# 4. Add timeout middleware with SSE exemption (runs before rate limiting)
-# SSE endpoints like /chat/stream are exempt from timeout
-TimeoutMiddleware = create_timeout_middleware(settings)
-app.add_middleware(TimeoutMiddleware)
+# 2. SSE-safe GZip
+app.add_middleware(SSESafeGZipMiddleware, minimum_size=500, compresslevel=6)
 
-# 5. Add rate limiting middleware (runs before size limits)
-# Per-route and per-API-key overrides configured in settings
-RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
-app.add_middleware(RateLimitingMiddleware)
-
-# 6. Add request size limit middleware (runs before security headers)
-# Per-endpoint size limits: chat=5MB, health=1KB, default=10MB
-SizeLimitMiddleware = create_size_limit_middleware(settings)
-app.add_middleware(SizeLimitMiddleware)
-
-# 7. Add security headers middleware (runs closest to routes)
-# Path-aware CSP: docs (relaxed), SSE (restrictive), API (strict)
-SecurityHeadersMiddleware = create_security_headers_middleware(settings)
-app.add_middleware(SecurityHeadersMiddleware)
+# 1. Logging (outermost)
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
 
 
 # Custom exception handlers for structured errors

@@ -87,7 +87,7 @@ class SizeLimitMiddleware:
         except PayloadTooLargeException as e:
             # Send 413 response when size limit exceeded
             await self._send_payload_too_large_response(
-                send, e.max_bytes, e.received_bytes, e.path
+                send, scope, e.max_bytes, e.received_bytes, e.path
             )
 
     def _get_size_limit(self, path: str) -> int:
@@ -112,18 +112,42 @@ class SizeLimitMiddleware:
         # Return default limit
         return self.default_max_bytes
 
+    def _extract_request_id(self, scope: dict) -> str:
+        """
+        Extract request ID from ASGI scope for error correlation.
+
+        Args:
+            scope: ASGI scope
+
+        Returns:
+            str: Request ID from X-Request-ID header or 'unknown' if not found
+        """
+        # Extract request ID from X-Request-ID header
+        headers = dict(scope.get("headers", []))
+        request_id_header = headers.get(b"x-request-id")
+
+        if request_id_header:
+            return request_id_header.decode("utf-8", errors="ignore")
+
+        # Fallback to unknown if header not present
+        return "unknown"
+
     async def _send_payload_too_large_response(
-        self, send: Send, max_bytes: int, received_bytes: int, path: str
+        self, send: Send, scope: dict, max_bytes: int, received_bytes: int, path: str
     ) -> None:
         """
         Send 413 Payload Too Large response using ASGI send.
 
         Args:
             send: ASGI send callable
+            scope: ASGI scope for extracting request ID
             max_bytes: Maximum allowed bytes
             received_bytes: Bytes received before limit hit
             path: Request path
         """
+        # Extract request ID from headers
+        request_id = self._extract_request_id(scope)
+
         logger.warning(
             "Request size limit exceeded",
             path=path,
@@ -131,6 +155,7 @@ class SizeLimitMiddleware:
             received_bytes=received_bytes,
             max_mb=round(max_bytes / 1024 / 1024, 1),
             received_mb=round(received_bytes / 1024 / 1024, 1),
+            request_id=request_id,
         )
 
         # Create error response matching app error format
@@ -138,7 +163,7 @@ class SizeLimitMiddleware:
             "error": "APP-413-PAYLOAD",
             "message": f"Request payload too large (max {max_bytes // 1024 // 1024}MB)",
             "origin": "app",
-            "requestId": "unknown",  # Will be enhanced with request ID correlation
+            "requestId": request_id,
             "maxBytes": max_bytes,
             "receivedBytes": received_bytes,
         }

@@ -121,10 +121,16 @@ class TimeoutMiddleware:
             scope: ASGI scope
 
         Returns:
-            str: Request ID or 'unknown' if not found
+            str: Request ID from X-Request-ID header or 'unknown' if not found
         """
-        # Request ID might be set by logging middleware
-        # For now return unknown, will be enhanced when middleware order is set
+        # Extract request ID from X-Request-ID header
+        headers = dict(scope.get("headers", []))
+        request_id_header = headers.get(b"x-request-id")
+
+        if request_id_header:
+            return request_id_header.decode("utf-8", errors="ignore")
+
+        # Fallback to unknown if header not present
         return "unknown"
 
     async def _send_timeout_response(

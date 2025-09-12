@@ -199,9 +199,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     def _get_api_csp(self) -> str:
         """Get strict CSP for API endpoints."""
         directives = [
-            "default-src 'none'",  # No resources allowed by default
-            "connect-src 'self'",  # Only same-origin requests
-            # Allow connections to external services
+            "default-src 'none'",
+            # Merge into a single connect-src directive
             "connect-src 'self' https://api.anthropic.com https://*.artemsys.ai",
             "object-src 'none'",
             "frame-ancestors 'none'",
