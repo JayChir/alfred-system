@@ -18,8 +18,12 @@ from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import Settings, get_settings
+from src.middleware.gzip_sse_safe import SSESafeGZipMiddleware
 from src.middleware.logging import LoggingMiddleware, PerformanceLoggingMiddleware
 from src.middleware.rate_limiting import create_rate_limiting_middleware
+from src.middleware.security import create_security_headers_middleware
+from src.middleware.size_limits import create_size_limit_middleware
+from src.middleware.timeout import create_timeout_middleware
 from src.routers import chat, device, health
 from src.services.rate_limiter import get_rate_limiter_service
 from src.utils.logging import configure_logging, get_logger
@@ -261,25 +265,42 @@ rate_limiter_service.load_overrides_from_json(
 # Store service on app state for health checks
 app.state.rate_limiter = rate_limiter_service
 
-# Add middleware in reverse execution order (Starlette runs last-added first)
-# Target execution order: Logging → RateLimiting → CORS → routes
+"""
+Add middleware in reverse of desired execution order (Starlette runs last-added first).
+Desired execution: Logging → GZip → CORS → Timeout → RateLimit → SizeLimit → SecurityHeaders → routes
+So we ADD in this order: SecurityHeaders, SizeLimit, RateLimit, Timeout, CORS, GZip, Logging.
+"""
 
-# 1. Add CORS middleware (runs third, outermost before routes)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        str(origin) for origin in settings.cors_origins
-    ],  # Convert URLs to strings
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# 7. Security headers (closest to routes)
+SecurityHeadersMiddleware = create_security_headers_middleware(settings)
+app.add_middleware(SecurityHeadersMiddleware)
 
-# 2. Add rate limiting middleware (runs second, after logging)
+# 6. Request size limits
+SizeLimitMiddleware = create_size_limit_middleware(settings)
+app.add_middleware(SizeLimitMiddleware)
+
+# 5. Rate limiting
 RateLimitingMiddleware = create_rate_limiting_middleware(rate_limiter_service)
 app.add_middleware(RateLimitingMiddleware)
 
-# 3. Add structured logging middleware (runs first, innermost)
+# 4. Timeout with SSE exemption
+TimeoutMiddleware = create_timeout_middleware(settings)
+app.add_middleware(TimeoutMiddleware)
+
+# 3. CORS (explicit headers, with credentials)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[str(origin) for origin in settings.cors_origins],
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.cors_allow_methods,
+    allow_headers=settings.cors_allow_headers,
+    max_age=settings.cors_max_age,
+)
+
+# 2. SSE-safe GZip
+app.add_middleware(SSESafeGZipMiddleware, minimum_size=500, compresslevel=6)
+
+# 1. Logging (outermost)
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold_ms=1000)
 
